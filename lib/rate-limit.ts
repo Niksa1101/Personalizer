@@ -5,6 +5,15 @@
  *
  * The limiter is INVISIBLE to callers: /api/login returns an identical 401 at
  * every tier (D14). Nothing here shapes a response.
+ *
+ * ONE GLOBAL BUCKET — no per-client keying. This reverses D13, which keyed on
+ * `x-forwarded-for` → `x-real-ip` → 'local'. Nothing sits in front of this app
+ * (Tech.md §2 — Next binds loopback directly), so those headers are never set
+ * by a proxy and are always attacker-supplied: a caller sending a fresh value
+ * per request got a fresh bucket per request and the tiers never fired. Since
+ * the limiter is the only brute-force control over APP_PASSWORD, a bypassable
+ * one is worse than none — it reads as protection that isn't there. One bucket
+ * is also the honest model for a tool with exactly one operator.
  */
 
 interface Tier {
@@ -19,49 +28,35 @@ const TIERS: Tier[] = [
 ]
 
 const LONGEST_WINDOW_MS = Math.max(...TIERS.map((t) => t.windowMs))
-const MAX_TRACKED_PER_KEY = 32
+const MAX_TRACKED = 32
 
-const buckets = new Map<string, number[]>() // key -> ascending failure timestamps
+let failures: number[] = [] // ascending failure timestamps
 
 function sweep(now: number): void {
-  for (const [key, times] of buckets) {
-    const kept = times.filter((t) => now - t < LONGEST_WINDOW_MS)
-    if (kept.length === 0) buckets.delete(key)
-    else buckets.set(key, kept)
-  }
+  failures = failures.filter((t) => now - t < LONGEST_WINDOW_MS)
 }
 
-export function isLockedOut(key: string, now: number = Date.now()): boolean {
+export function isLockedOut(now: number = Date.now()): boolean {
   sweep(now)
-  const times = buckets.get(key)
-  if (!times) return false
   return TIERS.some(
-    (tier) => times.filter((t) => now - t < tier.windowMs).length >= tier.failures,
+    (tier) => failures.filter((t) => now - t < tier.windowMs).length >= tier.failures,
   )
 }
 
 /** Call ONLY for a failure that was actually evaluated. An attempt made while
  *  already locked out must not extend the lockout, or it could never decay (D16). */
-export function recordFailure(key: string, now: number = Date.now()): void {
+export function recordFailure(now: number = Date.now()): void {
   sweep(now)
-  const times = buckets.get(key) ?? []
-  times.push(now)
-  buckets.set(key, times.slice(-MAX_TRACKED_PER_KEY))
+  failures.push(now)
+  failures = failures.slice(-MAX_TRACKED)
 }
 
-/** A successful, non-locked-out login clears the key (D17). */
-export function clearFailures(key: string): void {
-  buckets.delete(key)
-}
-
-/** x-forwarded-for first hop -> x-real-ip -> 'local' (D13). */
-export function clientKey(headers: Headers): string {
-  const fwd = headers.get('x-forwarded-for')
-  if (fwd) return fwd.split(',')[0]!.trim()
-  return headers.get('x-real-ip')?.trim() || 'local'
+/** A successful, non-locked-out login clears the record (D17). */
+export function clearFailures(): void {
+  failures = []
 }
 
 /** Test-only. */
 export function resetRateLimiter(): void {
-  buckets.clear()
+  failures = []
 }

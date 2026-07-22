@@ -1,13 +1,6 @@
-import {
-  checkOrigin,
-  setSessionCookie,
-} from '@/lib/dal'
-import {
-  clearFailures,
-  clientKey,
-  isLockedOut,
-  recordFailure,
-} from '@/lib/rate-limit'
+import { checkOrigin, setSessionCookie } from '@/lib/dal'
+import { assertEnv } from '@/lib/env'
+import { clearFailures, isLockedOut, recordFailure } from '@/lib/rate-limit'
 import { passwordMatches, signSession } from '@/lib/session'
 
 function invalidCredentialsResponse(): Response {
@@ -34,20 +27,23 @@ export async function POST(request: Request) {
     return Response.json({ error: 'bad_request' }, { status: 400 })
   }
 
-  const { password } = body as { password: string; next?: string }
-  const key = clientKey(request.headers)
+  const { password } = body as { password: string }
 
-  if (isLockedOut(key)) {
+  if (isLockedOut()) {
     return invalidCredentialsResponse()
   }
 
-  const expected = process.env.APP_PASSWORD ?? ''
-  if (!passwordMatches(password, expected)) {
-    recordFailure(key)
+  // The validated environment, not raw process.env: passwordMatches('', '') is
+  // true, so a `?? ''` fallback would turn a missing APP_PASSWORD into an open
+  // door. assertEnv() is memoized and throws if the variable is absent, which
+  // makes a misconfiguration a 500 rather than a bypass.
+  const { APP_PASSWORD } = assertEnv()
+  if (!passwordMatches(password, APP_PASSWORD)) {
+    recordFailure()
     return invalidCredentialsResponse()
   }
 
-  clearFailures(key)
+  clearFailures()
   const token = await signSession()
   await setSessionCookie(token)
 
