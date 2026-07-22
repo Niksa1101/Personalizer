@@ -39,7 +39,7 @@ AS $$ SELECT 'CMP-' || lpad(nextval('public.campaign_ref_seq')::text, 2, '0') $$
 -- §4.3 — the dedupe key. Deterministic and immutable, so it can back a unique
 -- index.
 --
--- SUPERSEDED by 20260722120100_normalize_domain_host_only.sql. The version
+-- SUPERSEDED by 20260722131136_normalize_domain_host_only.sql. The version
 -- below assumes only a host reaches it, which contradicted Tech.md §5.2 step 7
 -- and would have keyed `https://acme.com/about-us` as `acme.com/about-us`. The
 -- replacement reduces a full URL to its host itself. Left in place because it

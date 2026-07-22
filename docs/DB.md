@@ -10,7 +10,7 @@
 >
 > The engine is PostgreSQL 17, not the 15 originally assumed. Nothing in this schema depended on the difference; the version is corrected here rather than silently.
 
-> ⚠️ **Two migrations added 2026-07-22 are written but NOT YET APPLIED** (§9.1): `20260722120000_default_privileges.sql` (§7.1.2) and `20260722120100_normalize_domain_host_only.sql` (§4.3). Until `supabase db push` runs, the live project still grants `anon` on new objects and still keys dedupe on the un-hardened `normalize_domain()`. §4.3 and §7.1.2 describe the intended state, not the current one.
+> **Two migrations were added and applied on 2026-07-22** after the Phase 0–2 review (§9.1): `20260722131125_default_privileges.sql` (§7.1.2) and `20260722131136_normalize_domain_host_only.sql` (§4.3). Verified live afterwards: `pg_default_acl` for `public` now lists only `postgres` and `service_role`; `anon` holds `EXECUTE` on none of the seven public functions; `heartbeat` `INSERT` still succeeds, so the keep-alive is intact; and the three seeded domains are unchanged, so the `normalize_domain()` replacement needed no backfill.
 
 > **Supersedes the original brief.** Three decisions here override earlier assumptions and must not be re-derived from the brief:
 > 1. A lead is **not** globally single-use. It may be processed once **per campaign**, producing separate assets and URLs.
@@ -277,7 +277,7 @@ LANGUAGE sql AS $$ SELECT 'CMP-' || lpad(nextval('campaign_ref_seq')::text, 2, '
 
 The dedupe key. Deterministic and immutable, so it can back a unique index.
 
-The function reduces a URL **or** a bare host to a bare lowercase host, in this order: strip scheme and userinfo → cut at the first `/`, `?` or `#` → strip `:port` → strip leading `www.` → strip a trailing root dot → `nullif('')`. See `20260722120100_normalize_domain_host_only.sql` for the implementation.
+The function reduces a URL **or** a bare host to a bare lowercase host, in this order: strip scheme and userinfo → cut at the first `/`, `?` or `#` → strip `:port` → strip leading `www.` → strip a trailing root dot → `nullif('')`. See `20260722131136_normalize_domain_host_only.sql` for the implementation.
 
 Scope note: this function produces the **dedupe key only**. `www.` is stripped here and *not* in the stored `website_url`, which keeps the URL the Admin actually sees faithful to the CSV. Full URL normalization — tracking-parameter stripping, scheme defaulting — happens in application code at import time and is specified in `Tech.md` §5.2.
 
@@ -777,7 +777,7 @@ It matters here specifically because Supabase's default privileges hand `anon` a
 
 ##### 7.1.2 Two gaps in that revoke, closed after review
 
-Measuring the live project rather than re-reading the migration found that §7.1.1 was doing less than it claimed. Migration `20260722120000_default_privileges.sql` closes both:
+Measuring the live project rather than re-reading the migration found that §7.1.1 was doing less than it claimed. Migration `20260722131125_default_privileges.sql` closes both:
 
 1. **`REVOKE ... ON ALL TABLES` is point-in-time.** It says nothing about objects created later, and `pg_default_acl` still granted `anon`/`authenticated` `arwdDxtm` on tables, `rwU` on sequences and `X` on functions for anything `postgres` subsequently creates in `public`. Every phase from 4 onward adds objects.
 2. **`ALL TABLES` never covered functions.** `seed_demo_data()` was revoked individually in §10.1 — which is exactly the remember-by-hand failure mode — and migration 03's four helpers were not remembered. `normalize_domain()`, `error_code_bucket()`, `next_lead_ref()` and `next_campaign_ref()` were all anon-`EXECUTE`-able over PostgREST RPC.
@@ -886,8 +886,8 @@ supabase/
     20260720120900_seed_function.sql     -- §10 — seed_demo_data()
 
     -- Added after the Phase 0–2 review (PRD.md §11):
-    20260722120000_default_privileges.sql          -- §7.1.2
-    20260722120100_normalize_domain_host_only.sql  -- §4.3
+    20260722131125_default_privileges.sql          -- §7.1.2
+    20260722131136_normalize_domain_host_only.sql  -- §4.3
   seed.sql                               -- one line: SELECT public.seed_demo_data();
 ```
 

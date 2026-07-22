@@ -365,7 +365,7 @@ Each phase lists its exit criteria. Exit criteria are binary: an agent should be
 
 Applied to the Supabase project *Personalizer* as ten migrations (`DB.md` §9.1). Live inventory: **13 tables · 9 enum types · 40 indexes · 17 foreign keys · 13 check constraints · 8 `updated_at` triggers · 2 generated columns · RLS on 13/13 · 1 public bucket.**
 
-> **Two further migrations were added after the Phase 0–2 review** (`20260722120000_default_privileges.sql`, `20260722120100_normalize_domain_host_only.sql`) and are **written but not yet applied** — see the corrections block below. Apply with `npx supabase link --project-ref <ref>` then `npx supabase db push`; the schema inventory above is unaffected, as neither adds or alters a table.
+> **Two further migrations were added and applied on 2026-07-22** after the Phase 0–2 review (`20260722131125_default_privileges.sql`, `20260722131136_normalize_domain_host_only.sql`) — see the corrections block below. The inventory above is unchanged: neither adds or alters a table. Both filenames match their recorded `schema_migrations` versions, so `db push` stays a no-op.
 
 **Exit — all four met:**
 
@@ -417,9 +417,9 @@ A review of the three completed phases found no blockers — `npm run build`, `t
 
 2. **`/api/login` read `process.env.APP_PASSWORD ?? ''`.** `passwordMatches('', '')` returns `true`, so the fallback encoded "an empty expected password is acceptable". Not reachable — `instrumentation.ts` refuses the boot first — but it is now `assertEnv().APP_PASSWORD`, making a misconfiguration a 500 rather than an open door.
 
-3. **Privilege gaps, found by measuring the live project rather than re-reading migration 07** (`DB.md` §7.1.2). Its `REVOKE` was point-in-time and never covered `FUNCTIONS` at all, so migration 03's four helpers were anon-`EXECUTE`-able and every object added in Phases 4–16 would have arrived with `anon` grants. Neither was exploitable when found. Closed by `20260722120000_default_privileges.sql`.
+3. **Privilege gaps, found by measuring the live project rather than re-reading migration 07** (`DB.md` §7.1.2). Its `REVOKE` was point-in-time and never covered `FUNCTIONS` at all, so migration 03's four helpers were anon-`EXECUTE`-able and every object added in Phases 4–16 would have arrived with `anon` grants. Neither was exploitable when found. Closed by `20260722131125_default_privileges.sql`.
 
-4. **`normalize_domain()` had two contradicting contracts** (`DB.md` §4.3, `Tech.md` §5.2). Following `Tech.md` literally would have keyed `https://acme.com/about-us` as `acme.com/about-us` and silently failed to dedupe it — a Phase 6 landmine that only stayed hidden because the seed passes bare hosts. Both layers corrected: the importer passes the host, and the function now reduces a full URL to one itself (`20260722120100_normalize_domain_host_only.sql`).
+4. **`normalize_domain()` had two contradicting contracts** (`DB.md` §4.3, `Tech.md` §5.2). Following `Tech.md` literally would have keyed `https://acme.com/about-us` as `acme.com/about-us` and silently failed to dedupe it — a Phase 6 landmine that only stayed hidden because the seed passes bare hosts. Both layers corrected: the importer passes the host, and the function now reduces a full URL to one itself (`20260722131136_normalize_domain_host_only.sql`).
 
 Also: the login form's lockout countdown was deleted. It was driven by a client-local counter that reset on reload and never decayed, so it both hid real lockouts behind a bare "Incorrect password" and invented lockouts that had already expired; the server returns an identical 401 at every tier by design (D14), so the client cannot honestly render a timer. `proxy.ts` now forwards `x-pathname` so the expired-cookie path preserves `?next=` the way the no-cookie path already did (D46). `safeNext()` moved to `lib/next-path.ts` as the single sanitizer for both.
 
