@@ -2,14 +2,7 @@ import { redirect } from "next/navigation"
 
 import { LoginForm } from "@/components/login-form"
 import { getSession } from "@/lib/dal"
-
-function safeNext(raw: string | string[] | undefined): string {
-  if (typeof raw !== "string") return "/"
-  if (!raw.startsWith("/") || raw.startsWith("//") || raw.startsWith("/\\")) {
-    return "/"
-  }
-  return raw
-}
+import { safeNext } from "@/lib/next-path"
 
 export default async function LoginPage({
   searchParams,
