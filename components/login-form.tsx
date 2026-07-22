@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback, useEffect, useRef, useState } from "react"
+import { useState } from "react"
 import { useRouter } from "next/navigation"
 import { Eye, EyeOff } from "lucide-react"
 import { toast } from "sonner"
@@ -22,22 +22,6 @@ import {
 } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 
-const COUNTDOWN_60S = 60_000
-const COUNTDOWN_15M = 15 * 60_000
-
-function formatCountdown(ms: number): string {
-  const totalSeconds = Math.max(0, Math.ceil(ms / 1000))
-  const minutes = Math.floor(totalSeconds / 60)
-  const seconds = totalSeconds % 60
-  return `${minutes}:${seconds.toString().padStart(2, "0")}`
-}
-
-function countdownDuration(failures: number): number | null {
-  if (failures >= 10) return COUNTDOWN_15M
-  if (failures >= 5) return COUNTDOWN_60S
-  return null
-}
-
 export function LoginForm({ next }: { next: string }) {
   const router = useRouter()
   const [password, setPassword] = useState("")
@@ -45,29 +29,6 @@ export function LoginForm({ next }: { next: string }) {
   const [capsLockOn, setCapsLockOn] = useState(false)
   const [showError, setShowError] = useState(false)
   const [submitting, setSubmitting] = useState(false)
-  const [countdownEndsAt, setCountdownEndsAt] = useState<number | null>(null)
-  const [tick, setTick] = useState(0)
-  const failuresRef = useRef(0)
-
-  const countdownMs =
-    countdownEndsAt === null ? 0 : Math.max(0, countdownEndsAt - tick)
-  const countdownActive = countdownMs > 0
-
-  useEffect(() => {
-    if (countdownEndsAt === null) return
-    const id = window.setInterval(() => setTick(Date.now()), 250)
-    return () => window.clearInterval(id)
-  }, [countdownEndsAt])
-
-  const startCountdownIfNeeded = useCallback((nextFailures: number) => {
-    const duration = countdownDuration(nextFailures)
-    if (duration === null) {
-      setCountdownEndsAt(null)
-      return
-    }
-    setCountdownEndsAt(Date.now() + duration)
-    setTick(Date.now())
-  }, [])
 
   const handleKeyEvent = (event: React.KeyboardEvent<HTMLInputElement>) => {
     setCapsLockOn(event.getModifierState("CapsLock"))
@@ -75,7 +36,7 @@ export function LoginForm({ next }: { next: string }) {
 
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    if (submitting || countdownActive) return
+    if (submitting) return
 
     setSubmitting(true)
     setShowError(false)
@@ -84,20 +45,16 @@ export function LoginForm({ next }: { next: string }) {
       const response = await fetch("/api/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ password, next }),
+        body: JSON.stringify({ password }),
       })
 
       if (response.ok) {
-        failuresRef.current = 0
-        setCountdownEndsAt(null)
         router.push(next)
         router.refresh()
         return
       }
 
       if (response.status === 401) {
-        failuresRef.current += 1
-        startCountdownIfNeeded(failuresRef.current)
         setShowError(true)
         return
       }
@@ -135,7 +92,7 @@ export function LoginForm({ next }: { next: string }) {
                     onChange={(event) => setPassword(event.target.value)}
                     onKeyDown={handleKeyEvent}
                     onKeyUp={handleKeyEvent}
-                    disabled={submitting || countdownActive}
+                    disabled={submitting}
                     className="pr-10"
                   />
                   <Button
@@ -145,7 +102,7 @@ export function LoginForm({ next }: { next: string }) {
                     className="absolute top-1/2 right-1 -translate-y-1/2"
                     onClick={() => setShowPassword((visible) => !visible)}
                     aria-label={showPassword ? "Hide password" : "Show password"}
-                    disabled={submitting || countdownActive}
+                    disabled={submitting}
                   >
                     {showPassword ? (
                       <EyeOff className="size-4" />
@@ -162,17 +119,20 @@ export function LoginForm({ next }: { next: string }) {
               </FieldContent>
             </Field>
 
+            {/* No countdown here, deliberately. A client-side attempt counter
+                cannot observe the server's limiter: it reset on every reload
+                (hiding a real lockout behind a bare "Incorrect password") and
+                never decayed (inventing lockouts that had already expired). The
+                server returns an identical 401 at every tier by design (D14),
+                so the honest thing to show is that throttling exists, not a
+                timer the client is guessing at. */}
             <div aria-live="polite">
               {showError ? (
                 <Alert variant="destructive">
-                  <AlertDescription>Incorrect password</AlertDescription>
-                </Alert>
-              ) : null}
-              {countdownActive ? (
-                <Alert>
                   <AlertDescription>
-                    Too many attempts — try again in{" "}
-                    {formatCountdown(countdownMs)}
+                    Incorrect password. Repeated failures are temporarily
+                    throttled — if it keeps failing, wait a minute and try
+                    again.
                   </AlertDescription>
                 </Alert>
               ) : null}
@@ -181,7 +141,7 @@ export function LoginForm({ next }: { next: string }) {
             <Button
               type="submit"
               className="w-full"
-              disabled={submitting || countdownActive || password.length === 0}
+              disabled={submitting || password.length === 0}
             >
               {submitting ? "Signing in…" : "Sign in"}
             </Button>

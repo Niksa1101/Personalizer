@@ -1,6 +1,8 @@
+import { headers } from "next/headers"
 import { redirect } from "next/navigation"
 
 import { UnauthorizedError, verifySession } from "@/lib/dal"
+import { loginUrlFor } from "@/lib/next-path"
 
 export default async function AppLayout({
   children,
@@ -11,7 +13,12 @@ export default async function AppLayout({
     await verifySession()
   } catch (error) {
     if (error instanceof UnauthorizedError) {
-      redirect("/login")
+      // Reached only when a cookie was PRESENT but did not verify — the proxy
+      // already redirected the no-cookie case. `x-pathname` is set by proxy.ts
+      // because a layout receives no pathname of its own; without it this
+      // redirect would drop the destination the proxy takes care to preserve.
+      const requestHeaders = await headers()
+      redirect(loginUrlFor(requestHeaders.get("x-pathname")))
     }
     throw error
   }
