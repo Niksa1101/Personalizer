@@ -1,13 +1,15 @@
 import type { Metadata } from "next";
-import { Geist, Geist_Mono, Inter } from "next/font/google";
+import { Geist_Mono, Inter } from "next/font/google";
 import "./globals.css";
 import { Toaster } from "@/components/ui/sonner";
 import { cn } from "@/lib/utils";
 
-const inter = Inter({subsets:['latin'],variable:'--font-sans'});
-
-const geistSans = Geist({
-  variable: "--font-geist-sans",
+// Only the two faces globals.css actually references: Inter backs --font-sans
+// and --font-heading, Geist Mono backs --font-mono. Geist Sans was also loaded
+// here, exposing --font-geist-sans, which nothing consumed — a downloaded font
+// nobody could see.
+const inter = Inter({
+  variable: "--font-sans",
   subsets: ["latin"],
 });
 
@@ -29,7 +31,13 @@ export default function RootLayout({
   return (
     <html
       lang="en"
-      className={cn("h-full", "antialiased", geistSans.variable, geistMono.variable, "font-sans", inter.variable)}
+      className={cn(
+        "h-full",
+        "antialiased",
+        "font-sans",
+        inter.variable,
+        geistMono.variable,
+      )}
     >
       <body className="min-h-full flex flex-col">
         {children}
