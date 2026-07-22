@@ -29,6 +29,10 @@ ALTER TABLE public.heartbeat       ENABLE ROW LEVEL SECURITY;
 -- ---------------------------------------------------------------------------
 -- Table privileges — a second, independent layer
 -- ---------------------------------------------------------------------------
+-- INCOMPLETE — extended by 20260722120000_default_privileges.sql. The revokes
+-- below are point-in-time (they say nothing about objects created by later
+-- migrations) and never covered FUNCTIONS at all. See docs/DB.md §7.1.2.
+--
 -- RLS alone satisfies §7. This revoke exists because the two layers fail
 -- differently: RLS is per-table state that a later `ALTER TABLE ... DISABLE ROW
 -- LEVEL SECURITY` or an accidental permissive policy can undo, while a missing
