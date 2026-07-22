@@ -20,6 +20,9 @@
 # production
 /build
 
+# execution plans — the handoff medium between agents, deliberately untracked
+/docs/plans/
+
 # misc
 .DS_Store
 *.pem
@@ -32,6 +35,9 @@ yarn-error.log*
 
 # env files (can opt-in for committing if needed)
 .env*
+# ...but the template must be committed — it is the only record of the eight
+# required variables (docs/Tech.md §14.1).
+!.env.example
 
 # vercel
 .vercel
