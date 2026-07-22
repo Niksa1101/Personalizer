@@ -28,14 +28,23 @@ node -e "console.log(require('crypto').randomBytes(48).toString('base64url'))"
 
 - **7-day absolute expiry** from login — no sliding refresh. After seven days, sign in again.
 - **Rotating `SESSION_SECRET` invalidates every session** — all users (there is only one) must log in again. This is accepted; there is no migration path.
-- **Repeated wrong passwords are silently throttled** on the server (in-memory, per IP). The UI always shows "Incorrect password"; there is no `429` or lockout message from the server.
+- **Repeated wrong passwords are silently throttled** on the server — 5 failures in 60s, or 10 in 15 minutes. The throttle is in-memory and **global, not per IP**: nothing sits in front of this app, so `X-Forwarded-For` would be caller-supplied and a per-IP key would be trivially bypassable.
+- **A lockout is indistinguishable from a wrong password.** The server returns the same `401` either way — no `429`, no `Retry-After`, no countdown in the UI. If a password you are sure of keeps failing, you are probably throttled; wait a minute.
 - **Restarting the dev server clears the throttle** — a deliberate escape hatch during development.
 
-Verify auth end-to-end (dev server must already be running):
+Run the tests (no server, no database, no `.env.local` needed):
+
+```bash
+npm test
+```
+
+Verify auth end-to-end against the wire contract (dev server must already be running):
 
 ```bash
 npm run verify:auth
 ```
+
+`verify:auth` deliberately trips the throttle, so **restart the dev server afterwards** before signing in through the browser — otherwise the first real login looks broken.
 
 ## Scripts
 
@@ -44,6 +53,7 @@ npm run verify:auth
 | `npm run dev` | Next.js app on 127.0.0.1:3000 |
 | `npm run build` | Production build |
 | `npm run typecheck` | TypeScript check |
+| `npm test` | Unit tests (`node --test`) — throttle, env validation, redirect sanitation, sessions |
 | `npm run verify:auth` | Auth assertions against a live dev server |
 | `npm run verify:imports` | Dependency and binary smoke test |
 | `npm run seed` | Seed demo data (requires Supabase) |
