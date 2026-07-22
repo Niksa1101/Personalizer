@@ -39,11 +39,15 @@ AS $$ SELECT 'CMP-' || lpad(nextval('public.campaign_ref_seq')::text, 2, '0') $$
 -- §4.3 — the dedupe key. Deterministic and immutable, so it can back a unique
 -- index.
 --
+-- SUPERSEDED by 20260722120100_normalize_domain_host_only.sql. The version
+-- below assumes only a host reaches it, which contradicted Tech.md §5.2 step 7
+-- and would have keyed `https://acme.com/about-us` as `acme.com/about-us`. The
+-- replacement reduces a full URL to its host itself. Left in place because it
+-- is already applied; read the later migration for current behaviour.
+--
 -- Scope note: this produces the dedupe key ONLY. `www.` is stripped here and
 -- deliberately not in the stored website_url, which keeps the URL the Admin
--- sees faithful to the CSV. Full URL normalization — path, query, tracking
--- parameters — happens in application code at import time (docs/Tech.md §5.2);
--- only the resulting host reaches this function.
+-- sees faithful to the CSV.
 CREATE OR REPLACE FUNCTION public.normalize_domain(raw text) RETURNS text
 LANGUAGE sql IMMUTABLE
 SET search_path = ''
