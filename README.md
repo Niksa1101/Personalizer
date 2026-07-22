@@ -1,36 +1,56 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Personalizer
 
-## Getting Started
+Turn a Lead Finder CSV into personalized videos and public landing pages — one operator, one machine, loopback-only.
 
-First, run the development server:
+## Getting started
+
+1. Copy `.env.example` to `.env.local` and fill all eight variables (see `docs/Tech.md` §14.1).
+2. Install dependencies: `npm install`
+3. Start the dev server: `npm run dev` — binds to **http://127.0.0.1:3000** (not `0.0.0.0`).
+4. Open http://127.0.0.1:3000 and sign in with `APP_PASSWORD`.
+
+## Authentication / first login
+
+Personalizer protects every lead's PII behind a **single shared password** (`APP_PASSWORD` in `.env.local`). There are no user accounts — one session cookie (`pz_session`) means "logged in."
+
+| Variable | Purpose |
+|---|---|
+| `APP_PASSWORD` | The password you type on `/login`. Compared with a timing-safe SHA-256 digest check. |
+| `SESSION_SECRET` | HS256 signing key for the session cookie. Must be **at least 32 characters**. |
+
+Generate a strong `SESSION_SECRET`:
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+node -e "console.log(require('crypto').randomBytes(48).toString('base64url'))"
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+**Session behaviour:**
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+- **7-day absolute expiry** from login — no sliding refresh. After seven days, sign in again.
+- **Rotating `SESSION_SECRET` invalidates every session** — all users (there is only one) must log in again. This is accepted; there is no migration path.
+- **Repeated wrong passwords are silently throttled** on the server (in-memory, per IP). The UI always shows "Incorrect password"; there is no `429` or lockout message from the server.
+- **Restarting the dev server clears the throttle** — a deliberate escape hatch during development.
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+Verify auth end-to-end (dev server must already be running):
 
-## Learn More
+```bash
+npm run verify:auth
+```
 
-To learn more about Next.js, take a look at the following resources:
+## Scripts
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+| Command | Purpose |
+|---|---|
+| `npm run dev` | Next.js app on 127.0.0.1:3000 |
+| `npm run build` | Production build |
+| `npm run typecheck` | TypeScript check |
+| `npm run verify:auth` | Auth assertions against a live dev server |
+| `npm run verify:imports` | Dependency and binary smoke test |
+| `npm run seed` | Seed demo data (requires Supabase) |
+| `npm run worker` | Background job worker |
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## Documentation
 
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+- `docs/PRD.md` — product scope and build phases
+- `docs/Tech.md` — architecture, auth, pipeline, env
+- `docs/DB.md` — schema and migrations

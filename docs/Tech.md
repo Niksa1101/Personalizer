@@ -1,0 +1,877 @@
+# Personalizer — Technical Specification
+
+**Status:** Draft 1 — authoritative for implementation. Companions: `docs/DB.md` (schema), `docs/PRD.md` (product).
+**Rule for this document:** every framework claim is quoted from the docs bundled in `node_modules/next/dist/docs/` at Next.js **16.2.10** and cited by path. Nothing here is written from memory of earlier Next.js versions.
+
+> **Supersedes the original brief.** Four decisions override it and must not be re-derived: leads are processed **once per campaign** (not once globally); `campaign_leads` is the unit of work; the **intro video is the master clock** for video length; storage is **local-first**, with only the 720p web version reaching Supabase.
+
+---
+
+## 1. Stack and versions
+
+| Layer | Choice | Version | Note |
+|---|---|---|---|
+| Framework | Next.js (App Router) | 16.2.10 | Pinned exact; see §1.1 |
+| Runtime | React / React DOM | 19.2.4 | |
+| Language | TypeScript | ^5 | **5.1+ required** |
+| Node | Node.js | **≥ 20.9.0** | Hard floor, see §1.1 |
+| Styling | Tailwind CSS | v4 (`@tailwindcss/postcss`) | PostCSS plugin, no `tailwind.config.js` |
+| Components | shadcn/ui (preset `bKsEuMcK`) | style `base-luma` | Primitives are **`@base-ui/react` — Base UI, not Radix**. Icons `lucide-react`. See `AGENTS.md`. |
+| Tables | TanStack Table | v8 | Leads grid |
+| Database | Supabase (PostgreSQL **17**) | — | Server-side only, service role key. Draft 1 said 15; the provisioned project is 17 and nothing in `DB.md` depended on the difference. |
+| Queue | BullMQ + Redis (Docker) | — | Alternative in §7.6 |
+| Browser automation | Playwright (Chromium) | — | Headless |
+| Video | `ffmpeg-static` | — | npm-vendored binary, no system FFmpeg |
+| Auth | `jose` | — | HS256 signed session cookie |
+| Deploy target | Netlify (one shared site) | — | File-digest API |
+
+### 1.1 Next.js 16 constraint table
+
+Each row is verified against the bundled docs. Paths are relative to `node_modules/next/dist/docs/`.
+
+| # | Constraint | Source |
+|---|---|---|
+| 1 | `middleware.ts` is deprecated and **renamed to `proxy`**. | `01-app/03-api-reference/03-file-conventions/proxy.md:11` |
+| 2 | Server Action request bodies are **capped at 1MB by default**. | `01-app/02-guides/server-actions.md:83` |
+| 3 | Synchronous access to `cookies()`, `headers()`, `params`, `searchParams` is **fully removed**. | `01-app/02-guides/upgrading/version-16.md:298` |
+| 4 | `next dev` `--hostname` **defaults to `0.0.0.0`**. | `01-app/03-api-reference/06-cli/next.md:71` |
+| 5 | A custom `webpack` config makes `next build` **fail**. | `01-app/02-guides/upgrading/version-16.md:142` |
+| 6 | Node.js minimum is **20.9.0**; Node 18 unsupported. | `01-app/02-guides/upgrading/version-16.md:110` |
+| 7 | Route Handlers are **not cached by default**. | `01-app/01-getting-started/15-route-handlers.md:51` |
+| 8 | `next dev` outputs to `.next/dev`; a **lockfile prevents multiple instances**. | `01-app/02-guides/upgrading/version-16.md:920,922` |
+| 9 | `instrumentation.ts#register()` runs **once per server instance and must complete before the server is ready**. | `01-app/03-api-reference/03-file-conventions/instrumentation.md:18` |
+| 10 | Server Functions are **reachable via direct POST**, not only through the UI. | `01-app/01-getting-started/07-mutating-data.md:32` |
+
+Consequences are worked through where they bite: §4 (auth), §4.3 (uploads), §16 (dev setup).
+
+---
+
+## 2. System architecture
+
+```
+        ┌──────────────────────────────────────────────────────────┐
+        │                    Windows workstation                    │
+        │                                                          │
+        │  ┌────────────────────┐        ┌──────────────────────┐  │
+        │  │  Next.js app       │        │  Worker process      │  │
+        │  │  (npm run dev)     │        │  (npm run worker)    │  │
+        │  │  127.0.0.1:3000    │        │                      │  │
+        │  │                    │        │  ┌────────────────┐  │  │
+        │  │  • Admin UI        │ enqueue│  │ recorder step  │  │  │
+        │  │  • Route Handlers  │───────▶│  │ merge step     │  │  │
+        │  │  • proxy.ts + DAL  │        │  │ page step      │  │  │
+        │  │                    │        │  │ deploy step    │  │  │
+        │  └─────────┬──────────┘        │  └───────┬────────┘  │  │
+        │            │                   └──────────┼───────────┘  │
+        │            │      ┌────────────┐          │              │
+        │            └─────▶│   Redis    │◀─────────┘              │
+        │                   │  (Docker)  │  BullMQ                 │
+        │                   └────────────┘                         │
+        │                                                          │
+        │   LOCAL_STORAGE_ROOT/                                    │
+        │     {batch}/{lead-slug}/recording.mp4  ← raw, 30d TTL     │
+        │     {batch}/{lead-slug}/final.mp4      ← 1080p master     │
+        │     {batch}/{lead-slug}/web.mp4        ← 720p, transient  │
+        │     intros/{id}.mp4                    ← normalized       │
+        └───────────┬──────────────────────────┬───────────────────┘
+                    │                          │
+         ┌──────────▼──────────┐    ┌──────────▼──────────┐
+         │      Supabase       │    │       Netlify       │
+         │  • PostgreSQL (RLS) │    │  one shared site    │
+         │  • Storage:         │    │  digest deploy      │
+         │    lead-videos      │    │  /{camp}/{lead}     │
+         │    (720p web only)  │    └─────────────────────┘
+         └─────────────────────┘
+```
+
+**Two processes, deliberately.** The worker is not started by `instrumentation.ts`. That hook "is called **once** when a new Next.js server instance is initiated, and must complete before the server is ready to handle requests" (`01-app/03-api-reference/03-file-conventions/instrumentation.md:18`) — it is framed throughout as an observability hook, not a process supervisor. Starting a long-lived worker there would either block server readiness or leak a process per server instance. `npm run worker` runs alongside `npm run dev`.
+
+Both processes talk to Supabase directly with the service role key. Neither trusts the other's memory; Redis holds queue state and PostgreSQL holds truth.
+
+---
+
+## 3. Repo structure
+
+```
+app/
+  (auth)/login/page.tsx
+  (app)/
+    layout.tsx                    -- shell; calls verifySession()
+    page.tsx                      -- Dashboard
+    campaigns/[id]/page.tsx
+    leads/page.tsx
+    queue/page.tsx
+    intros/page.tsx
+    import/page.tsx
+    logs/page.tsx
+    settings/page.tsx
+  api/
+    login/route.ts                -- POST, sets session cookie
+    logout/route.ts
+    import/route.ts               -- POST multipart CSV      (§4.3)
+    intros/route.ts               -- POST multipart video     (§4.3)
+    leads/[id]/retry/route.ts
+    export/route.ts               -- GET  CSV download
+proxy.ts                          -- root; NOT middleware.ts  (§4.1)
+instrumentation.ts                -- observability only
+lib/
+  dal.ts                          -- verifySession(); server-only
+  session.ts                      -- jose sign/verify
+  supabase.ts                     -- service-role client; server-only
+  env.ts                          -- startup validation of all 8 vars
+  settings.ts                     -- lead → campaign → global resolution
+worker/
+  index.ts                        -- BullMQ worker bootstrap + boot recovery
+  steps/{record,merge,page,deploy}.ts
+  recorder/                       -- Playwright: launch, load, scroll, classify
+  video/                          -- FFmpeg: filter graph, probe, normalize
+  deploy/                         -- Netlify digest client
+supabase/migrations/              -- see DB.md §9
+scripts/seed.ts
+```
+
+**Module boundary that matters:** `lib/supabase.ts` and `lib/dal.ts` carry the `server-only` package import. The service role key bypasses RLS entirely (`DB.md` §7), so a single accidental client import of that module is a total data exposure. `server-only` turns that mistake into a build error.
+
+The worker imports from `lib/` but never from `app/`. Nothing in `app/` imports from `worker/`.
+
+---
+
+## 4. Authentication
+
+Single Admin, one shared password. No user table, no registration.
+
+### 4.1 `proxy.ts`, not `middleware.ts`
+
+> **Framework note — what changed and why.** The plan called for `middleware.ts`. In Next.js 16 the file convention is renamed: *"The `middleware` file convention is deprecated and has been renamed to `proxy`"* (`01-app/03-api-reference/03-file-conventions/proxy.md:11`). The file goes at the project root, exports a function named `proxy` (or a default export), and takes a `NextRequest` — no `edge` runtime declaration.
+
+```ts
+// proxy.ts
+import { NextResponse } from 'next/server'
+import type { NextRequest } from 'next/server'
+
+// Duplicated from lib/session.ts on purpose: proxy must not import from lib/,
+// or `server-only` and `jose` get dragged into it. Keep the two in sync.
+const SESSION_COOKIE_NAME = 'pz_session'
+
+export function proxy(request: NextRequest) {
+  if (request.cookies.get(SESSION_COOKIE_NAME)?.value) {
+    return NextResponse.next()
+  }
+
+  // API routes must 401 from their own handler, never redirect.
+  if (request.nextUrl.pathname.startsWith('/api/')) {
+    return NextResponse.next()
+  }
+
+  const url = new URL('/login', request.url)
+  const next = request.nextUrl.pathname + request.nextUrl.search
+  if (next && next !== '/') url.searchParams.set('next', next)
+  return NextResponse.redirect(url)
+}
+
+export const config = {
+  matcher: [
+    '/((?!login|api/login|api/logout|_next/static|_next/image|favicon.ico|robots.txt|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico)$).*)',
+  ],
+}
+```
+
+> **Framework note — matcher correction (Phase 2).** The draft matcher `/((?!login|_next/static|_next/image|favicon.ico).*)` also matched `/api/login`, so the proxy redirected the login POST and the app could never be entered. **`api/login` and `api/logout` are now excluded** from the negative lookahead. Every other `/api/*` path stays matched for cookie-presence checks, but handlers still call `verifySession()` themselves — excluding `/api` wholesale is the silent-coverage-loss hazard documented in §4.2.
+
+This check is **optimistic only**: it tests for the presence of a cookie, not its signature. It exists to redirect logged-out browsers, not to protect data.
+
+### 4.2 The Data Access Layer is the actual boundary
+
+Two documented facts make proxy-only auth unsafe here:
+
+1. *"Server Functions are reachable via direct POST requests, not just through your application's UI. Always verify authentication and authorization inside every Server Function."* (`01-app/01-getting-started/07-mutating-data.md:32`)
+2. *"Server Functions are not separate routes in this chain. They are handled as POST requests to the route where they are used, so a Proxy matcher that excludes a path will also skip Server Function calls on that path."* (`01-app/03-api-reference/03-file-conventions/proxy.md:217`)
+
+> **Correction to the plan.** The plan stated this second point as *"Server Function POSTs inherit the page route's matcher, so a matcher excluding `/api` does not protect them."* The first clause is right; the conclusion is backwards. The documented hazard is the opposite direction — a matcher that **excludes** a path **also skips** Server Function calls on that path, which silently removes coverage rather than failing to exclude. The docs continue: *"A matcher change or a refactor that moves a Server Function to a different route can silently remove Proxy coverage"* (`proxy.md:219`). Either way the remedy is identical and is what we implement: verify inside every handler.
+
+So every Route Handler and Server Action begins with `verifySession()`:
+
+```ts
+// lib/dal.ts
+import 'server-only'
+import { cookies } from 'next/headers'
+import { cache } from 'react'
+import { jwtVerify } from 'jose'
+
+export const verifySession = cache(async () => {
+  const cookieStore = await cookies()          // await required — see §4.4
+  const token = cookieStore.get('pz_session')?.value
+  if (!token) throw new UnauthorizedError()
+  try {
+    const { payload } = await jwtVerify(token, secretKey())  // HS256
+    return { admin: true, expiresAt: payload.exp }
+  } catch {
+    throw new UnauthorizedError()
+  }
+})
+```
+
+`react.cache` dedupes the verification within a single render pass, so calling it in a layout and three handlers costs one verify.
+
+The session cookie: `httpOnly`, `secure` in production, `sameSite: 'lax'`, `path: '/'`, 7-day expiry, HS256-signed with `SESSION_SECRET`. `APP_PASSWORD` is compared using a timing-safe comparison. Rate limiting on `/api/login`: 5 attempts per minute per IP, in-memory — adequate for a single-operator tool bound to localhost.
+
+### 4.3 Uploads go through Route Handlers, not Server Actions
+
+> **Framework note — what changed and why.** The plan routed uploads through Server Actions. Those cap request bodies: *"Action requests are capped at 1MB by default"* (`01-app/02-guides/server-actions.md:83`). An intro video is tens of megabytes. Raising `serverActions.bodySizeLimit` would apply the higher ceiling to *every* action in the app, which is a worse trade than moving two endpoints. Route Handlers have no equivalent documented default limit and are *"not cached by default"* (`01-app/01-getting-started/15-route-handlers.md:51`), so always-fresh admin data needs no opt-out.
+
+```ts
+// app/api/intros/route.ts
+export async function POST(request: Request) {
+  await verifySession()                        // §4.2 — not optional
+  const formData = await request.formData()
+  const file = formData.get('file') as File
+  // stream to LOCAL_STORAGE_ROOT/intros/, then normalize (§9.5)
+}
+```
+
+CSV import (`/api/import`) uses the identical shape.
+
+### 4.4 Async request APIs
+
+> **Framework note — what changed and why.** *"Starting with Next.js 16, synchronous access is fully removed. These APIs can only be accessed asynchronously"* (`01-app/02-guides/upgrading/version-16.md:298`). There is no compatibility shim to fall back on — v15's temporary sync access is gone.
+
+Every `cookies()`, `headers()`, `params` and `searchParams` is awaited. Page and handler props are typed as promises:
+
+```ts
+export default async function CampaignPage({
+  params,
+}: {
+  params: Promise<{ id: string }>
+}) {
+  const { id } = await params
+}
+```
+
+---
+
+## 5. Import pipeline
+
+`POST /api/import` — multipart, one CSV, one target campaign.
+
+### 5.1 Parse
+
+1. **Encoding.** UTF-8 assumed. A leading BOM (`EF BB BF`) is stripped and recorded in `import_batches.had_bom`.
+2. **Delimiter detection.** Count `,`, `;` and `\t` in the header line; the highest wins. Recorded in `import_batches.delimiter`. Ties resolve to `,`.
+3. **Header mapping.** Case-insensitive, whitespace- and underscore-normalized match against known aliases (`website`/`url`/`domain` → `website_url`; `company_name`/`business` → `company`; and so on). Unmapped columns are preserved verbatim in `leads.raw`.
+4. **Ragged rows are rejected, not repaired.** A row whose field count differs from the header's is pushed to `import_batches.rejected_rows` as `{row, reason}` with a **1-based row number that includes the header line** — the number the Admin sees in a text editor. Parsing continues; one bad row never fails an import.
+
+### 5.2 URL normalization
+
+Applied in order, on `website_url`:
+
+1. Trim; drop surrounding quotes.
+2. Add `https://` when no scheme is present.
+3. Lowercase the host. Leave the path alone — paths can be case-sensitive.
+4. Strip tracking parameters: `utm_*`, `fbclid`, `gclid`, `msclkid`, `ref`, `mc_cid`, `mc_eid`.
+5. Drop a trailing slash on a bare-host URL.
+6. Store the result in `leads.website_url` **with `www.` intact**.
+7. Compute `leads.domain = normalize_domain(website_url)` (`DB.md` §4.3), which additionally strips `www.`. This is the dedupe key only — the difference keeps the displayed URL faithful to the CSV while making the key stable.
+
+**Social-only URLs** — host matching `facebook.com`, `instagram.com`, `linkedin.com`, `twitter.com`, `x.com`, `tiktok.com`, `youtube.com`, `yelp.com`, or a known directory host — are not websites we can record. The lead is imported and its `campaign_leads` row is created with `status='skipped'`, `error_code='not_a_website'`. Importing rather than discarding keeps the row visible and countable; the Admin may later fix the URL and requeue.
+
+### 5.3 Dedupe
+
+Global, on normalized domain **or** email, per `DB.md` §6.1. For each parsed row:
+
+1. Look up an existing lead by `domain`, then by `email`.
+2. **No match** → insert `leads` + `campaign_leads`; increment `imported_count`.
+3. **Match, not in this campaign** → insert `campaign_leads` only, reusing the existing lead and its recording; increment `linked_count`. Surface *"already exists in campaign X"* in the import report — informational, not an error. Existing lead fields are **not** overwritten; the newer row's data lands in `leads.raw` for inspection.
+4. **Match, already in this campaign** → skip; increment `duplicate_count`. The `UNIQUE (campaign_id, lead_id)` constraint is the backstop if a concurrent import races this check.
+
+The Admin decides what to do about cross-campaign matches. The importer never merges records on its own.
+
+### 5.4 Assignment and enqueue
+
+All rows land in one `import_batches` row and one campaign. On commit, every `campaign_leads` row with `status='queued'` is enqueued (§7). Auto-enqueue is unconditional — there is no "import without processing" mode; pausing is a campaign-level concern.
+
+---
+
+## 6. Pipeline state machine
+
+Two fields, per `DB.md` §2.1–2.2: `status` (coarse, for filtering) and `current_step` (fine, for resumption).
+
+```
+              import
+                 │
+                 ▼
+            ┌─────────┐   social-only URL
+            │ queued  │──────────────────▶ skipped (terminal)
+            └────┬────┘
+                 │ worker claims
+                 ▼
+         ┌───────────────┐
+         │  processing   │  current_step advances:
+         │               │  recording → merge → page → deploy
+         └───┬───────┬───┘
+             │       │
+     no intro│       │ step throws
+             ▼       ▼
+       ┌─────────┐  ┌──────────────────┐
+       │ paused  │  │ attempt_count<2? │
+       │ step=   │  └────┬────────┬────┘
+       │ merge   │   yes │        │ no
+       └────┬────┘       ▼        ▼
+            │      (backoff,   ┌────────┐
+   intro    │       requeue    │ failed │
+   assigned │       same step) │        │
+            │                  └───┬────┘
+            └──────┐               │ manual retry
+                   ▼               │ (resume at current_step,
+              ┌─────────┐◀─────────┘  or force full restart)
+              │processing│
+              └────┬────┘
+                   │ deploy succeeds
+                   ▼
+              ┌──────────┐  Admin promotes
+              │ deployed │──────────────────▶ ┌───────┐
+              └──────────┘  (bulk-approvable) │ ready │
+                                              └───────┘
+```
+
+### 6.1 Transition rules
+
+| From | To | Trigger | Side effects |
+|---|---|---|---|
+| — | `queued` | Import | `queued_at`, `queued` event, BullMQ job |
+| `queued` | `processing` | Worker claims | `started_at`, `job_runs` row, `step_started` |
+| `processing` | `processing` | Step succeeds, more remain | `current_step` advances, `attempt_count` → 0 |
+| `processing` | `paused` | `merge` reached, campaign has no intro | `error_code='intro_missing'`, `paused` event |
+| `paused` | `queued` | Intro assigned, or manual resume | `resumed` event; re-enqueued at `merge` |
+| `processing` | `processing` | Step fails, `attempt_count < limit` | `attempt_count++`, `retry_scheduled`, backoff |
+| `processing` | `failed` | Step fails, retries exhausted | `error_code`, `error_detail`, `step_failed` |
+| `failed` | `queued` | Manual retry | `attempt_count` → 0; resumes at `current_step` |
+| `failed` | `queued` | Force full restart | `current_step` → `recording`, assets discarded |
+| `processing` | `deployed` | `deploy` succeeds | `deployed_at`, `netlify_url`, `deployed` event |
+| `deployed` | `ready` | Admin promotes | `promoted_at`, `promoted` event |
+| any | `processing` | Boot recovery | `interrupted` event, resume at `current_step` |
+
+**Recording runs first and is campaign-agnostic.** This is why a missing intro pauses at `merge` rather than blocking at the start: the expensive, reusable work completes regardless, and assigning an intro later costs only the merge onward.
+
+**Per-step manual rerun.** Any single step can be re-run in isolation from the lead drawer (re-record, re-merge, regenerate page, redeploy) without disturbing the others. This is the debugging affordance; the retry paths above are the automated ones.
+
+### 6.2 Resume semantics
+
+`current_step` is the resume point, always. A retry re-runs the step that failed and everything after it — never anything before. Discarding prior assets is the *force full restart* path and is explicit, because re-recording is the single most expensive operation in the system.
+
+---
+
+## 7. Queue
+
+### 7.1 Topology
+
+One BullMQ queue, `pipeline`. One job type, `process-lead`, whose payload is `{ campaignLeadId }` and nothing else — the worker re-reads state from PostgreSQL on pickup, so a stale queued job can never act on stale data.
+
+A single job walks all four steps in sequence within one worker invocation. Four separate queues were rejected: the steps share a working directory and large intermediate files, and splitting them buys parallelism the workstation cannot use anyway.
+
+- **Concurrency:** `settings.queue.concurrency`, default `1`, tested to `3`. Above 1, Chromium and FFmpeg contend for CPU and the wall-clock gain flattens fast.
+- **Job id:** `campaignLeadId`, which makes enqueueing idempotent — a double-import cannot double-process.
+- **`removeOnComplete`:** 100. **`removeOnFail`:** false. Truth lives in `job_runs`; Redis is a work queue, not a record.
+
+### 7.2 Retry and backoff
+
+`settings.queue.auto_retry_limit` (default 2) automatic attempts per step, then `failed`. Exponential backoff, base 30s: 30s, 60s. Retries are **per step**, not per job — `attempt_count` resets to 0 whenever `current_step` advances, so a lead that fails once at `recording` and once at `deploy` has not exhausted anything.
+
+Retry policy is worker-side, not a database constraint, precisely so the limit can be raised in `settings` without a migration (`DB.md` §5.4).
+
+### 7.3 Non-retryable failures
+
+`bad_website` bucket errors (`dns_failure`, `http_4xx`, `parked_domain`, `not_a_website`) skip retries and go straight to `failed`. A domain that does not resolve will not resolve 30 seconds later, and burning two attempts on 100 dead leads wastes minutes for nothing. `blocked` and `system` errors retry normally.
+
+### 7.4 Interruption recovery
+
+On boot, before consuming any new work, the worker:
+
+1. Selects `campaign_leads WHERE status='processing'` (served by the partial index `campaign_leads_processing_idx`, `DB.md` §6).
+2. For each, checks whether BullMQ still holds an active job with that id.
+3. If not, the process died mid-step: mark the open `job_runs` row `interrupted`, write an `interrupted` pipeline event, and re-enqueue at `current_step`.
+
+Recovery is automatic and needs no Admin action. The event exists so the timeline explains the gap rather than showing an unexplained restart.
+
+Partial files from a killed step are overwritten by the re-run — steps write to their final path only after success, staging through a `.tmp` sibling first.
+
+### 7.5 Cleanup jobs
+
+A repeatable BullMQ job, daily:
+
+- Purge recordings older than `settings.recorder.retention_days` (30): delete the file, set `recordings.purged_at`, null `local_path`.
+- Delete `videos.web_path` local copies where `uploaded_at IS NOT NULL` and the deploy succeeded.
+- Prune debug screenshots older than 30 days for leads not in `failed`.
+
+### 7.6 Alternative: a Supabase job table
+
+Recorded because it is a live option with fewer moving parts, not a hedge.
+
+Dropping BullMQ and Redis removes a Docker dependency and one whole class of "is Redis running?" support question. The queue becomes a claim query against `job_runs` extended with `claimed_by`, `claimed_at`, `visible_after`:
+
+```sql
+UPDATE job_runs SET claimed_by = $1, claimed_at = now()
+WHERE id = (
+  SELECT id FROM job_runs
+  WHERE state = 'queued' AND visible_after <= now()
+  ORDER BY created_at LIMIT 1
+  FOR UPDATE SKIP LOCKED
+) RETURNING *;
+```
+
+`FOR UPDATE SKIP LOCKED` makes this safe under concurrency. What is lost: BullMQ's backoff scheduling, repeatable jobs, and its dashboard — all reimplementable, each a small amount of code. What is gained: one less service, and queue state visible in the same database as everything else.
+
+**Decision:** BullMQ for now, because retry/backoff and repeatable cleanup jobs come free. The switch stays cheap: `DB.md` §11.4 notes that only `job_runs` gains columns and the rest of the schema is untouched. Revisit if Redis proves to be the main setup friction on a fresh Windows machine.
+
+---
+
+## 8. Recorder
+
+Playwright Chromium, headless, one visit per lead.
+
+### 8.1 Launch and context
+
+```ts
+const browser = await chromium.launch({
+  headless: true,
+  args: ['--disable-blink-features=AutomationControlled', '--mute-audio',
+         '--disable-dev-shm-usage', '--no-sandbox'],
+})
+const context = await browser.newContext({
+  viewport: { width: cfg.viewportWidth, height: cfg.viewportHeight },  // 1920×1080
+  userAgent: DESKTOP_CHROME_UA,       // realistic, current, no "HeadlessChrome"
+  locale: 'en-US',
+  deviceScaleFactor: 1,
+  recordVideo: { dir: tmpDir, size: { width, height } },
+})
+await context.addInitScript(() => {
+  Object.defineProperty(navigator, 'webdriver', { get: () => undefined })
+})
+```
+
+`navigator.webdriver` masking and a realistic UA reduce trivial bot detection. Nothing here defeats a real anti-bot service — sites that challenge us are classified `bot_detected` or `captcha` and reported, not fought. We visit each lead once and do not retry past a challenge.
+
+### 8.2 Load detection
+
+In order, capped by `nav_timeout_ms` (default 120000, per-campaign configurable):
+
+1. `page.goto(url, { waitUntil: 'networkidle' })`
+2. Force lazy images: scroll to bottom instantly, wait, scroll back to top. This triggers `IntersectionObserver`-based loaders that a top-of-page capture would otherwise film as blank boxes.
+3. `document.fonts.ready`
+4. Dismiss cookie banners (§8.3)
+5. Settle delay: `settings.recorder.post_load_delay_ms`, default 1500ms
+6. Screenshot → `screenshot_before_path`
+
+Timeout at any point → `nav_timeout` (`blocked` bucket; retryable).
+
+### 8.3 Cookie banner dismissal
+
+Best-effort, capped at 2 seconds total. Try, in order: a selector list for the common CMPs (OneTrust, Cookiebot, Osano, Quantcast, Didomi, Termly), then buttons whose accessible name matches `/^(accept|allow|agree|got it|ok|i understand)/i` within a fixed-position element. First hit wins; failure is not an error. A banner that survives ends up in the video — undesirable, not fatal, and visible in the before-screenshot when someone asks why.
+
+### 8.4 Scroll
+
+Constant velocity with ease-in and ease-out at the ends. Uniform middle speed keeps the capture readable; the eased ends stop it looking mechanical.
+
+```
+v(t):
+  0 ─────────────► ease_ms      : accelerate 0 → v_target  (ease-out cubic)
+  ease_ms ──────► T - ease_ms   : hold v_target
+  T - ease_ms ──► T             : decelerate v_target → 0  (ease-in cubic)
+```
+
+`ease_ms` is `settings.recorder.scroll_ease_ms` (800). Scroll is driven by `requestAnimationFrame` inside the page with an explicit per-frame delta, not `scrollIntoView` or CSS smooth scrolling — both are implementation-defined in duration and would make the capture length unpredictable, which matters because §9 has to stretch it to a known target.
+
+Target duration is the recording's natural length: `page_height_px / v_target`, clamped to [8s, 90s]. The clamp bounds the stretch factor the merge step will face.
+
+### 8.5 Post-capture
+
+Screenshot → `screenshot_after_path`. Close the context (Playwright finalizes the video on context close, not page close — a common source of zero-byte files). Probe with `ffprobe` for `duration_ms`, `width`, `height`. Move from `tmpDir` to `{batch}/{lead-slug}/recording.mp4`. Insert `recordings`.
+
+### 8.6 Error classification
+
+| Symptom | `error_code` | Bucket | Retry |
+|---|---|---|---|
+| `ENOTFOUND` / `EAI_AGAIN` | `dns_failure` | bad_website | no |
+| `ECONNREFUSED` | `connection_refused` | bad_website | no |
+| `ERR_CERT_*` | `ssl_error` | bad_website | no |
+| HTTP 404 / 410 | `http_4xx` | bad_website | no |
+| HTTP 5xx | `http_5xx` | bad_website | no |
+| Registrar placeholder markers | `parked_domain` | bad_website | no |
+| `document.body.innerText` < 200 chars, page height ≈ viewport | `empty_page` | bad_website | no |
+| Social/directory host | `not_a_website` | bad_website | no |
+| Challenge markers (Cloudflare, PerimeterX, DataDome) | `bot_detected` | blocked | yes |
+| reCAPTCHA / hCaptcha iframe | `captcha` | blocked | yes |
+| HTTP 403 with geo markers | `geo_blocked` | blocked | yes |
+| Redirected to a login route | `login_required` | blocked | yes |
+| Navigation timeout | `nav_timeout` | blocked | yes |
+| Playwright target crash | `browser_crash` | system | yes |
+
+Both debug screenshots are retained for any lead ending in `failed`, and are what the drawer shows next to the error text.
+
+---
+
+## 9. Video
+
+### 9.1 The master clock
+
+**The intro's duration sets the final video's duration.** The website recording is stretched or trimmed to match. This inverts the naive approach (play the recording, overlay whatever intro fits) and is the reason final videos always end exactly when the pitch ends.
+
+Given `D_intro` (cached in `intro_videos.duration_ms`, never re-probed) and `D_rec`:
+
+```
+stretch = D_intro / D_rec
+```
+
+| Case | Action |
+|---|---|
+| `stretch < 1` | Trim the recording to `D_intro`. Scroll simply doesn't finish; better than speeding up into a blur. |
+| `1 ≤ stretch ≤ max_stretch` | `setpts=stretch*PTS` on the recording. |
+| `stretch > max_stretch` (2.5) | **Speed-floor fallback:** stretch by exactly `max_stretch`, then freeze the final frame for the remaining `D_intro − (D_rec × max_stretch)`. |
+
+The fallback exists because beyond ~2.5× the scroll stops reading as motion and starts reading as a stutter. A held final frame under a continuing voiceover looks intentional; a 6× crawl looks broken. Both `stretch_factor` and `used_speed_floor` are persisted (`DB.md` §5.7) so the pacing of any given video can be explained after the fact.
+
+### 9.2 Filter graph
+
+Recording as the base layer, intro as a circular PiP bubble. Intro audio only — the recording is muted at capture (`--mute-audio`) and carries no track worth keeping.
+
+```
+ffmpeg
+  -i recording.mp4                       # [0] base
+  -i intro.mp4                           # [1] overlay
+  -filter_complex "
+    [0:v]setpts=${stretch}*PTS,
+         scale=1920:1080:force_original_aspect_ratio=increase,
+         crop=1920:1080,fps=30[base];
+
+    [1:v]scale=${pipW}:${pipH}:force_original_aspect_ratio=increase,
+         crop=${pipW}:${pipH},fps=30[pipsrc];
+
+    # circular mask via alphaextract on a drawn ellipse
+    color=black@0:s=${pipW}x${pipH},format=rgba,
+      geq=r=0:g=0:b=0:a='if(lte(hypot(X-${cx},Y-${cy}),${r}),255,0)'[mask];
+    [pipsrc][mask]alphamerge[pip];
+
+    [base][pip]overlay=${ox}:${oy}:shortest=0[outv]
+  "
+  -map "[outv]" -map 1:a
+  -c:v libx264 -preset medium -crf 20 -pix_fmt yuv420p
+  -c:a aac -b:a 128k -ar 48000
+  -t ${D_intro_seconds}
+  final.mp4
+```
+
+Where `pipW = round(1920 × pip_scale)` (default 0.20 → 384px), `pipH = pipW` for bubble layouts, `r = pipW/2`, and `(ox, oy)` derive from `merge_layout` with a 48px margin — `bubble_br` → `(1920−pipW−48, 1080−pipH−48)`.
+
+`-t D_intro` is a hard truncation and the belt-and-braces guarantee that the master clock holds even if a filter misbehaves. `shortest=0` prevents the overlay from ending the output early.
+
+Speed-floor fallback adds `tpad=stop_mode=clone:stop_duration=${hold}` to the `[base]` chain before `overlay`.
+
+`merge_layout='fullscreen_intro'` uses a different graph entirely — `concat` rather than `overlay`, intro first, recording second — and in that mode the master-clock stretch does not apply.
+
+### 9.3 Encode presets
+
+| Output | Where | Settings |
+|---|---|---|
+| Master | Local, kept | 1080p30, x264 `preset medium`, CRF 20, AAC 128k/48kHz |
+| Web | Supabase Storage | 720p30, x264 `preset medium`, **CRF 28**, **AAC 96k**, **`-movflags +faststart`** |
+
+The web version is produced from the master in a second pass, not re-composited. `+faststart` moves the moov atom to the front so the landing page can begin playback before the file finishes downloading — without it, a cold mobile view stalls on a blank player.
+
+Local `web.mp4` is deleted after a successful upload and deploy; the Supabase copy is canonical from then on.
+
+### 9.4 Binary
+
+`ffmpeg-static` — the npm-vendored binary. No system FFmpeg, no PATH assumption, no "works on my machine" divergence in filter or encoder availability. `ffprobe-static` alongside it for probing.
+
+### 9.5 Intro normalization
+
+On upload, every intro is transcoded to a fixed profile before it is ever used: 1920×1080, 30fps, H.264 `yuv420p`, AAC 48kHz stereo. Then probed once, with `duration_ms` cached in `intro_videos`.
+
+Normalizing up front means the merge step never branches on intro properties — no per-job resolution checks, no frame-rate mismatch artifacts in the overlay, and one probe instead of one per lead. At 100 leads per campaign that is 99 saved probes and, more importantly, one fewer thing that can differ between the first lead and the last.
+
+---
+
+## 10. Landing pages and deploy
+
+### 10.1 Slugs
+
+**Campaign slug:** from the campaign name, lowercased, non-alphanumerics → `-`, collapsed, trimmed. Unique across campaigns.
+
+**Lead slug:** `{name}-{city}`, same transform — `acme-plumbing-portland`. Name source order: `company`, then `full_name`, then `first_name last_name`, then the email local-part, then `leads.ref` as the last resort. On collision within a campaign, append a 6-char hash of `campaign_leads.id`: `acme-plumbing-portland-a3f9c1`.
+
+**Hash only on collision**, never by default. These URLs are pasted into outreach emails by a human and read by a recipient; `acme-plumbing-portland` earns a click that `lead-a3f9c1e2` does not.
+
+Final path: `/{campaign-slug}/{lead-slug}` → `https://{site}.netlify.app/acme-outreach/acme-plumbing-portland`.
+
+### 10.2 Page generation
+
+`campaigns.landing_template` with `{{placeholder}}` substitution (`DB.md` §5.1.1). Unknown or missing placeholders render empty — never a literal `{{first_name}}`, and never a failed deploy.
+
+Requirements the template must satisfy:
+
+- **Mobile-first.** Most recipients open outreach on a phone.
+- **Poster + play button**, not autoplay. `<video>` with `poster`, `preload="metadata"`, `playsinline`, `controls`. Autoplay is blocked on mobile anyway, and a poster frame loads far faster than a video header.
+- `<meta name="robots" content="noindex, nofollow">`, reinforced by a site-level `robots.txt` `Disallow: /`. These pages name individual businesses and must not be indexed.
+- **No tracking.** No analytics, no pixels, no third-party requests. The page's only external fetch is the Supabase video URL.
+- Self-contained: inline CSS, no CDN dependencies.
+
+Rendered HTML is stored in `landing_pages.html` with its SHA-1 in `content_sha1`.
+
+### 10.3 Netlify digest deploy
+
+Netlify's file-digest API takes a **full manifest** of the site and responds with only the digests it is missing.
+
+```
+POST /api/v1/sites/{site_id}/deploys
+  { "files": { "/campaign-a/lead-1/index.html": "<sha1>",
+               "/campaign-a/lead-2/index.html": "<sha1>",
+               "/robots.txt": "<sha1>" } }
+→ { "id": "deploy_id", "required": ["<sha1>", ...] }
+
+PUT /api/v1/deploys/{deploy_id}/files/{path}     # only for digests in `required`
+```
+
+Sending the complete manifest each time is what makes this safe: the manifest **is** the desired state of the site, so a page that was deployed but is now absent from the manifest gets removed, and nothing drifts. Because `required` only ever contains changed files, redeploying 100 leads to change one costs one small upload.
+
+**Unpublishing** is therefore just a deploy whose manifest omits the page. That is how the "also remove the published landing page?" prompt is implemented when a lead or campaign is deleted.
+
+Deploys are **serialized** — one in flight at a time, guarded by a Redis lock. Concurrent deploys to one site race on the manifest and the loser silently reverts the winner's pages.
+
+`settings.deploy.dry_run` runs the entire pipeline including HTML generation and stores everything, then skips every Netlify call, marking `deploy_status='pending'`. This is how the acceptance criteria are exercised without publishing.
+
+---
+
+## 11. Storage lifecycle
+
+| Artifact | Location | Retention |
+|---|---|---|
+| Raw recording | Local `{batch}/{lead-slug}/recording.mp4` | **30 days**, then purged |
+| 1080p master | Local `{batch}/{lead-slug}/final.mp4` | Indefinite |
+| 720p web (local) | Local `{batch}/{lead-slug}/web.mp4` | Deleted after upload + deploy |
+| 720p web (remote) | Supabase `lead-videos/{uuid}/final.mp4` | Indefinite |
+| Intro (normalized) | Local `intros/{id}.mp4` | Indefinite |
+| Debug screenshots | Local `{batch}/{lead-slug}/*.png` | 30 days, kept for `failed` |
+| Landing HTML | PostgreSQL `landing_pages.html` | Indefinite |
+
+All local paths are stored **relative to `LOCAL_STORAGE_ROOT`** (`DB.md` §3), so moving the storage root is an env change rather than a migration.
+
+**Missing asset handling.** Before each step, verify its inputs exist:
+
+- Recording missing **with** `purged_at` set → expected. Silently re-record, write a `note` event ("raw recording had been purged; re-recorded automatically"). No Admin action.
+- Recording missing **without** `purged_at` → the file was moved or deleted out from under us. Fail with `missing_asset` and offer a re-record.
+- Master or intro missing → `missing_asset`, no automatic recovery. Both are supposed to be permanent; their absence means something is wrong that a silent re-run would paper over.
+
+The distinction is the whole point: purging is our own scheduled behavior and should be invisible; unexpected absence is a signal.
+
+> **Gap found in Phase 1 — a third case exists.** The list above covers *purged* and *unexpectedly absent*, but not **never recorded**: no `recordings` row at all, while `current_step` is already past `recording`. That is exactly the state the seed creates (`DB.md` §10.1) and the state AC-4 walks through, so it is not hypothetical. The correct behaviour is almost certainly to record first and continue — it matches the purged case, and `missing_asset` would strand the demo campaign on a fresh clone with no way forward from the UI. **Resolve in Phase 7**, where the state machine is built; the recorder step it depends on lands in Phase 8.
+
+---
+
+## 12. Export
+
+`GET /api/export?campaign={id}&status=ready` → CSV, UTF-8 with BOM (Excel opens it correctly).
+
+| Column | Source |
+|---|---|
+| `ref` | `leads.ref` (`LD-0042`) |
+| `first_name`, `last_name`, `full_name` | `leads` |
+| `company`, `email`, `phone` | `leads` |
+| `website_url`, `city`, `state`, `country`, `industry` | `leads` |
+| `campaign` | `campaigns.name` |
+| `campaign_ref` | `campaigns.ref` |
+| `landing_url` | `campaign_leads.netlify_url` |
+| `video_url` | `videos.web_public_url` |
+| `status` | `campaign_leads.status` |
+| `deployed_at`, `promoted_at` | ISO 8601 UTC |
+
+Defaults to `status='ready'` — the handoff to outreach is reviewed leads only. Other statuses are exportable for inspection but that is not the primary path.
+
+---
+
+## 13. Logging and observability
+
+Two streams, deliberately separate:
+
+- **`pipeline_events`** — operator-facing timeline for one lead. Short, human-readable, rendered in the drawer. Written at every state transition.
+- **`logs`** — system-facing. Stack traces, FFmpeg stderr, Netlify responses, Playwright diagnostics. Scoped (`importer`/`recorder`/`merger`/`deployer`/`web`/`worker`) and correlated by `campaign_lead_id` and `job_run_id` where applicable.
+
+An operator should never need `logs` to understand *what* happened — only to understand *why*. If a failure is unexplained without a stack trace, the `error_detail` on `campaign_leads` is not doing its job.
+
+FFmpeg stderr is captured in full for failed encodes and truncated to the last 4KB for successful ones. Realtime: the dashboard subscribes to `pipeline_events` and `campaign_leads` via Supabase Realtime, with a 5-second polling fallback when the socket drops.
+
+---
+
+## 14. Configuration
+
+### 14.1 Environment — all eight
+
+`.env.example` (specified here; **not written to disk in this phase**):
+
+```bash
+NEXT_PUBLIC_SUPABASE_URL=
+SUPABASE_SERVICE_ROLE_KEY=
+NETLIFY_SITE_ID=
+NETLIFY_TOKEN=
+LOCAL_STORAGE_ROOT=
+REDIS_URL=
+APP_PASSWORD=
+SESSION_SECRET=
+```
+
+`lib/env.ts` validates all eight at startup, in both the Next process and the worker, and **refuses to boot** if any is missing or empty — with a message naming every missing variable at once, not just the first. A half-configured system that starts and then fails on lead 40 wastes far more time than one that refuses to start.
+
+Additionally, set **`NEXT_SERVER_ACTIONS_ENCRYPTION_KEY`** in production: closure variables in inline actions are encrypted, and *"For multi-instance and self-hosted deployments, set `NEXT_SERVER_ACTIONS_ENCRYPTION_KEY` to a stable key shared across instances"* (`01-app/02-guides/server-actions.md:85`). Without it the key is generated per build, so a restart breaks clients holding in-flight action references. It is not in the eight because it is deployment hygiene rather than app configuration.
+
+`NEXT_PUBLIC_SUPABASE_URL` carries the `NEXT_PUBLIC_` prefix by Supabase convention. Note that the **service role key deliberately does not** — it must never reach a client bundle (§3).
+
+### 14.2 Settings resolution
+
+**Lead override → campaign value → global `settings` default.** Null means inherit, which is why override columns are nullable rather than defaulted (`DB.md` §5.4). `lib/settings.ts` exposes one resolver; no other module reads `settings` directly.
+
+### 14.3 `next.config.ts`
+
+> **Framework note — what changed and why.** Keep this file **webpack-free**. Turbopack is the default builder in 16, and *"If your project has a custom `webpack` configuration and you run `next build` (which now uses Turbopack by default), the build will **fail** to prevent misconfiguration issues"* (`01-app/02-guides/upgrading/version-16.md:142`). This matters if shadcn or Tailwind tooling ever suggests a webpack tweak — the escape hatches are `--webpack` to opt out or `--turbopack` to ignore the config (`version-16.md:146,160`), but the right answer for this project is not to add one.
+
+Also **do not enable `cacheComponents`** (the PPR successor). Every screen in this tool is dynamic, per-request admin data; the caching machinery is pure overhead with nothing to cache.
+
+---
+
+## 15. Keep-alive
+
+Supabase pauses inactive free-tier projects. A GitHub Actions cron writes one row daily:
+
+```yaml
+name: supabase-keepalive
+on:
+  schedule: [{ cron: '17 6 * * *' }]
+  workflow_dispatch:
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          curl -sS -X POST "$SUPABASE_URL/rest/v1/heartbeat" \
+            -H "apikey: $SUPABASE_ANON_KEY" \
+            -H "Authorization: Bearer $SUPABASE_ANON_KEY" \
+            -H "Content-Type: application/json" \
+            -H "Prefer: return=minimal" \
+            -d '{"source":"github-action"}' --fail
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+```
+
+`Prefer: return=minimal` is explicit because the key has **no `SELECT` privilege at all** — asking PostgREST to echo the inserted row back would fail on the read, not the write. PostgREST has defaulted to `minimal` on `POST` since v9, so this is belt-and-braces rather than a fix (verified against the live project: `201`), but relying on a server-side default for the one call that keeps the database alive is not worth the saving.
+
+**The service role key must never enter GitHub secrets.** It bypasses RLS on every table (`DB.md` §7); a leak there is total exposure of every lead. The anon key used here is constrained by the insert-only policy on `heartbeat` (`DB.md` §7.3) — no `SELECT`, no `UPDATE`, no `DELETE`, and `WITH CHECK (source = 'github-action')` pins even what it can write. Worst case, someone adds rows to a table whose only purpose is to be written to.
+
+That bound is now real rather than aspirational: `DB.md` §8.1 removed a storage policy that would have let this same key list every video in the bucket, and §7.1.1 revoked the table privileges Supabase grants `anon` by default. Both were found by measuring what the key could actually do, which is worth repeating whenever its scope changes.
+
+The `17 6 * * *` minute offset avoids the top-of-hour spike when every scheduled GitHub Action fires at once and queues.
+
+---
+
+## 16. Local development (fresh Windows machine)
+
+**Prerequisites:** Node **≥ 20.9.0** — *"Minimum version now `20.9.0` (LTS); Node.js 18 no longer supported"* (`01-app/02-guides/upgrading/version-16.md:110`) — plus Docker Desktop and Git.
+
+```bash
+git clone <repo> && cd personalizer
+npm install
+npx playwright install chromium        # browser binary, separate from npm install
+cp .env.example .env.local             # fill all eight
+docker run -d --name pz-redis --restart unless-stopped -p 6379:6379 redis:7-alpine
+npx supabase db push                   # apply migrations (DB.md §9)
+npm run seed                           # demo campaign (DB.md §10)
+```
+
+Then, in two terminals:
+
+```bash
+npm run dev        # http://127.0.0.1:3000
+npm run worker
+```
+
+### 16.1 Scripts
+
+```json
+{
+  "dev": "next dev -H 127.0.0.1",
+  "build": "next build",
+  "start": "next start -H 127.0.0.1",
+  "worker": "tsx --env-file-if-exists=.env.local worker/index.ts",
+  "seed": "tsx --env-file-if-exists=.env.local scripts/seed.ts",
+  "typecheck": "tsc --noEmit",
+  "verify:imports": "tsx scripts/verify-imports.ts",
+  "lint": "eslint"
+}
+```
+
+**`--env-file-if-exists` is load-bearing.** Next.js loads `.env.local` automatically; `tsx` does not. Without the flag the worker starts with an empty environment and fails its own startup check, which looks like a configuration bug and is not one. The `-if-exists` variant (Node 22+) means a missing file is a warning rather than a crash, so CI and a fresh clone still run.
+
+> **Framework note — what changed and why.** `-H 127.0.0.1` is explicit and required. In Next.js 16 `--hostname` *"Default: 0.0.0.0"* (`01-app/03-api-reference/06-cli/next.md:71`), which exposes the dev server to the whole local network. This app holds every lead's contact details behind one shared password; on a café or coworking Wi-Fi, the default binding puts that on the network. Binding to loopback is the correct posture for a local-only admin tool.
+
+### 16.2 `ffmpeg-static` needs its install script to run
+
+`ffmpeg-static` **downloads** its ~79MB binary in a postinstall step; it is not in the npm tarball. Under npm's `allowScripts` policy (and in many CI sandboxes) that script is blocked, which leaves the module resolvable but pointing at a file that does not exist — so the failure surfaces much later, as `ffmpeg_failure` on the first merge, rather than at install time.
+
+```bash
+npm install-scripts approve ffmpeg-static      # then, if the binary is still absent:
+node node_modules/ffmpeg-static/install.js
+```
+
+`ffprobe-static` is unaffected — it ships prebuilt binaries per platform.
+
+**`--restart unless-stopped` on the Redis container is deliberate.** Without it, a reboot leaves Docker Desktop running but the container stopped, and the worker fails to connect with an error that points at Redis rather than at the missing container — a confusing five minutes every time the machine restarts. `unless-stopped` rather than `always` so that an explicit `docker stop pz-redis` still means stopped.
+
+`npm run verify:imports` checks both binaries exist on disk, not merely that the modules import. Run it after any fresh `npm install`.
+
+### 16.3 Two Windows notes
+
+- **One dev server per project.** *"a lockfile mechanism prevents multiple `next dev` or `next build` instances on the same project"* (`version-16.md:922`). A second `npm run dev` fails rather than silently taking another port. Dev output now lives in `.next/dev` (`version-16.md:920`), so `next dev` and `next build` no longer clobber each other.
+- **Paths.** `LOCAL_STORAGE_ROOT` is an absolute Windows path (`C:\personalizer-media`). All paths *stored in the database* are POSIX-relative to it (`DB.md` §3). Use `path.join` at every boundary; never concatenate. Long-path support matters — `{batch}/{lead-slug}/` with a long company name plus a collision hash approaches `MAX_PATH` on unprepared systems.
+
+---
+
+## 17. Risks and open items
+
+| # | Risk | Mitigation / status |
+|---|---|---|
+| 1 | Anti-bot services block a meaningful share of leads | Classified as `blocked`, surfaced for manual handling. Accepted — we do not escalate. |
+| 2 | Sequential processing is slow at 100 leads (~45–90 min) | Concurrency configurable to 3. Unattended runs make wall-clock secondary. |
+| 3 | Netlify deploy serialization is a bottleneck | Only if deploys are frequent; each is small. Batch-deploy at the end of a run if it bites. |
+| 4 | Recording quality varies with site design | Debug screenshots + per-step re-record. Some sites simply record poorly. |
+| 5 | Local storage growth (~50–100MB/lead across artifacts) | 30-day raw purge, intermediates deleted. Masters accumulate — **needs a retention decision** once real volume exists. |
+| 6 | Domain-only dedupe collisions | `DB.md` §6.1; accepted at this volume. |
+| 7 | Redis as setup friction on Windows | §7.6 alternative stays viable; switch cost is bounded. |
+| 8 | Netlify free-tier deploy limits at high lead counts | Unmeasured. **Open** — verify before the first 500-lead run. |
+
+**Open questions for the next review**, deliberately not assumed:
+
+1. **Master retention** (risk 5) — indefinite is stated but untested against real disk growth.
+2. **`fullscreen_intro` layout** — §9.2 notes the master clock does not apply in that mode. The intended behavior when intro and recording lengths differ is undefined.
+3. **Netlify rate limits** (risk 8).
+4. **No public poster frame** (raised in Phase 1; `DB.md` §11 item 5). §10.2 requires poster + play precisely because a poster loads faster than a video header on a cold mobile view — but `videos.poster_path` is local-only and `DB.md` §8 puts nothing but the video in the bucket, so there is no URL to put in `<video poster>`. Either upload the poster as a second small object and add a `{{poster_url}}` placeholder to `DB.md` §5.1.1, or accept `preload="metadata"` as a deliberate compromise and say so. **Decide in Phase 10.**
+5. **Merge with no recording at all** (raised in Phase 1; §11 above). **Decide in Phase 7.**
+
+---
+
+## 18. Framework claims index
+
+Every Next.js assertion in this document, for re-verification. Paths relative to `node_modules/next/dist/docs/`.
+
+| Claim | Path:line | Used in |
+|---|---|---|
+| `middleware` renamed to `proxy` | `01-app/03-api-reference/03-file-conventions/proxy.md:11` | §4.1 |
+| Server Function POSTs skip excluded matcher paths | `01-app/03-api-reference/03-file-conventions/proxy.md:217,219` | §4.2 |
+| Server Functions reachable by direct POST | `01-app/01-getting-started/07-mutating-data.md:32` | §4.2 |
+| Verify auth inside each action, not in Proxy alone | `01-app/02-guides/production-checklist.md:102` | §4.2 |
+| Render-time gating is not a security boundary | `01-app/02-guides/server-actions.md:89` | §4.2 |
+| Server Action body limit 1MB | `01-app/02-guides/server-actions.md:83` | §4.3 |
+| `NEXT_SERVER_ACTIONS_ENCRYPTION_KEY` for self-hosted | `01-app/02-guides/server-actions.md:85` | §14.1 |
+| Route Handlers not cached by default | `01-app/01-getting-started/15-route-handlers.md:51` | §4.3 |
+| Sync request APIs fully removed | `01-app/02-guides/upgrading/version-16.md:298` | §4.4 |
+| Custom webpack config fails the build | `01-app/02-guides/upgrading/version-16.md:142,146,160` | §14.3 |
+| Node 20.9+ required | `01-app/02-guides/upgrading/version-16.md:110` | §16 |
+| `next dev` hostname defaults to 0.0.0.0 | `01-app/03-api-reference/06-cli/next.md:71` | §16.1 |
+| `.next/dev` output + instance lockfile | `01-app/02-guides/upgrading/version-16.md:920,922` | §16.2 |
+| `register()` blocks server readiness | `01-app/03-api-reference/03-file-conventions/instrumentation.md:18` | §2 |
