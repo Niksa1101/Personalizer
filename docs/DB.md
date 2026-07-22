@@ -3,12 +3,14 @@
 **Status:** Draft 2 — authoritative for schema, and **applied**. Companion documents: `docs/Tech.md`, `docs/PRD.md`.
 **Engine:** PostgreSQL **17** (Supabase managed). Accessed **server-side only** with the service role key.
 
-> **Implemented on 2026-07-21** (`PRD.md` §11 Phase 1). Every section below is live in the Supabase project named *Personalizer*, applied as the ten migrations of §9.1. Two things changed during implementation and the text now reflects the implementation, not the draft:
+> **Implemented on 2026-07-21** (`PRD.md` §11 Phase 1). Every section below is live in the Supabase project named *Personalizer*, applied as the first ten migrations of §9.1. Two things changed during implementation and the text now reflects the implementation, not the draft:
 >
 > 1. **§8 no longer creates a `SELECT` policy on `storage.objects`.** The drafted policy did not enable public playback — it enabled bucket *listing*, which defeated §8's own privacy argument. Measured, then removed. See §8.1.
 > 2. **The seed is a function, not a loose script.** `seed.sql` and `npm run seed` are two thin callers of one idempotent `seed_demo_data()`. See §10.1.
 >
 > The engine is PostgreSQL 17, not the 15 originally assumed. Nothing in this schema depended on the difference; the version is corrected here rather than silently.
+
+> ⚠️ **Two migrations added 2026-07-22 are written but NOT YET APPLIED** (§9.1): `20260722120000_default_privileges.sql` (§7.1.2) and `20260722120100_normalize_domain_host_only.sql` (§4.3). Until `supabase db push` runs, the live project still grants `anon` on new objects and still keys dedupe on the un-hardened `normalize_domain()`. §4.3 and §7.1.2 describe the intended state, not the current one.
 
 > **Supersedes the original brief.** Three decisions here override earlier assumptions and must not be re-derived from the brief:
 > 1. A lead is **not** globally single-use. It may be processed once **per campaign**, producing separate assets and URLs.
@@ -275,19 +277,13 @@ LANGUAGE sql AS $$ SELECT 'CMP-' || lpad(nextval('campaign_ref_seq')::text, 2, '
 
 The dedupe key. Deterministic and immutable, so it can back a unique index.
 
-```sql
-CREATE OR REPLACE FUNCTION normalize_domain(raw text) RETURNS text
-LANGUAGE sql IMMUTABLE AS $$
-  SELECT nullif(
-    regexp_replace(
-      regexp_replace(lower(btrim(raw)), '^https?://', ''),  -- strip scheme
-      '^www\.', ''                                          -- strip www.
-    ),
-  '')
-$$;
-```
+The function reduces a URL **or** a bare host to a bare lowercase host, in this order: strip scheme and userinfo → cut at the first `/`, `?` or `#` → strip `:port` → strip leading `www.` → strip a trailing root dot → `nullif('')`. See `20260722120100_normalize_domain_host_only.sql` for the implementation.
 
-Scope note: this function produces the **dedupe key only**. `www.` is stripped here and *not* in the stored `website_url`, which keeps the URL the Admin actually sees faithful to the CSV. Full URL normalization — path, query, tracking-parameter stripping — happens in application code at import time and is specified in `Tech.md` §5; only the resulting host reaches this function.
+Scope note: this function produces the **dedupe key only**. `www.` is stripped here and *not* in the stored `website_url`, which keeps the URL the Admin actually sees faithful to the CSV. Full URL normalization — tracking-parameter stripping, scheme defaulting — happens in application code at import time and is specified in `Tech.md` §5.2.
+
+> **Correction landed after review.** The original version stripped `^https?://` and `^www\.` and nothing else, on the stated assumption that "only the resulting host reaches this function". `Tech.md` §5.2 step 7 said the opposite — pass the full `website_url` — so `https://acme.com/about-us` would have produced the dedupe key `acme.com/about-us`, and the same business under `/contact` would not have deduped against it. Because `leads_domain_uk` indexes the stored column rather than this expression, the collision would have been silent: two rows, two recordings, two landing pages, one business.
+>
+> Nothing surfaced because the only caller so far is the seed, which passes bare hosts; Phase 6 is the first real caller and could have been written exactly to spec and still been wrong. **Both** layers were corrected — `Tech.md` §5.2 now says the importer passes the host, and the function no longer assumes it got one. The dedupe key is what a hundred leads per batch are matched on; it should not depend on a caller having read a scope note.
 
 ### 4.4 Error bucketing
 
@@ -779,6 +775,25 @@ It matters here specifically because Supabase's default privileges hand `anon` a
 
 `heartbeat.id` is `GENERATED ALWAYS AS IDENTITY`, whose sequence is owned by the column and needs no separate `USAGE` grant — which is why the sequence revoke does not break the keep-alive.
 
+##### 7.1.2 Two gaps in that revoke, closed after review
+
+Measuring the live project rather than re-reading the migration found that §7.1.1 was doing less than it claimed. Migration `20260722120000_default_privileges.sql` closes both:
+
+1. **`REVOKE ... ON ALL TABLES` is point-in-time.** It says nothing about objects created later, and `pg_default_acl` still granted `anon`/`authenticated` `arwdDxtm` on tables, `rwU` on sequences and `X` on functions for anything `postgres` subsequently creates in `public`. Every phase from 4 onward adds objects.
+2. **`ALL TABLES` never covered functions.** `seed_demo_data()` was revoked individually in §10.1 — which is exactly the remember-by-hand failure mode — and migration 03's four helpers were not remembered. `normalize_domain()`, `error_code_bucket()`, `next_lead_ref()` and `next_campaign_ref()` were all anon-`EXECUTE`-able over PostgREST RPC.
+
+```sql
+ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL ON TABLES    FROM anon, authenticated;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL ON SEQUENCES FROM anon, authenticated;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL ON FUNCTIONS FROM PUBLIC, anon, authenticated;
+
+REVOKE ALL ON ALL FUNCTIONS IN SCHEMA public FROM PUBLIC, anon, authenticated;
+```
+
+Neither gap was exploitable when found: the two ref functions run with invoker rights and `anon` has no `USAGE` on the sequences, so they error out; the other two are pure. The value is entirely forward-looking.
+
+Two notes for anyone revisiting this. `ALTER DEFAULT PRIVILEGES` binds to the **current role** — `postgres` for migrations, which is the role carrying the grants; the parallel `supabase_admin` entries are platform-owned and left alone. And the live project ships a Supabase platform event trigger, `public.rls_auto_enable()`, that enables RLS on each new `public` table — so the residual risk here was never really about tables. It was about **views** (no RLS of their own, and the trigger fires only on `CREATE TABLE`) and **functions**, which is what the default privileges above actually close.
+
 ### 7.2 Realtime
 
 Supabase Realtime respects RLS. Because the dashboard subscribes through the server, not the browser, no policy is needed to make live updates work — the server-side subscription uses the service role. Should a future change move subscriptions into the browser, that requires a real auth model, not a loosened policy.
@@ -869,8 +884,14 @@ supabase/
     20260720120700_rls.sql               -- §7
     20260720120800_storage.sql           -- §8
     20260720120900_seed_function.sql     -- §10 — seed_demo_data()
+
+    -- Added after the Phase 0–2 review (PRD.md §11):
+    20260722120000_default_privileges.sql          -- §7.1.2
+    20260722120100_normalize_domain_host_only.sql  -- §4.3
   seed.sql                               -- one line: SELECT public.seed_demo_data();
 ```
+
+The two later migrations **amend** earlier ones rather than replacing them. §9.2 is forward-only: the ten original files are already applied and recorded, so editing one would be a no-op against any database that has it (`db push` compares recorded versions to filenames) while silently diverging from every database that does not. `20260720120700_rls.sql` and `20260720120200_functions.sql` therefore carry pointer comments marking them superseded — a reader who opens them first must not take them as current.
 
 The `updated_at` triggers are **not** in the functions migration — a trigger needs its table, so each is attached beside its `CREATE TABLE`. The same applies to the indexes DB.md names inline in §5 (`recordings_lead_active_uk`, `job_runs_*`, `pipeline_events_lead_idx`, `logs_*`), which read as part of those tables' definitions; `20260720120600_indexes.sql` holds the §6 set only.
 

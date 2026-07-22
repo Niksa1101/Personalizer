@@ -108,6 +108,7 @@ app/
   api/
     login/route.ts                -- POST, sets session cookie
     logout/route.ts
+    session/route.ts              -- GET; protected probe for verify:auth (§4.2)
     import/route.ts               -- POST multipart CSV      (§4.3)
     intros/route.ts               -- POST multipart video     (§4.3)
     leads/[id]/retry/route.ts
@@ -117,6 +118,8 @@ instrumentation.ts                -- observability only
 lib/
   dal.ts                          -- verifySession(); server-only
   session.ts                      -- jose sign/verify
+  rate-limit.ts                   -- login throttle, in-memory        (§4.2)
+  next-path.ts                    -- post-login redirect sanitation   (§4.5)
   supabase.ts                     -- service-role client; server-only
   env.ts                          -- startup validation of all 8 vars
   settings.ts                     -- lead → campaign → global resolution
@@ -154,8 +157,13 @@ import type { NextRequest } from 'next/server'
 const SESSION_COOKIE_NAME = 'pz_session'
 
 export function proxy(request: NextRequest) {
+  const pathname = request.nextUrl.pathname + request.nextUrl.search
+
   if (request.cookies.get(SESSION_COOKIE_NAME)?.value) {
-    return NextResponse.next()
+    // Forward the path so the layout can rebuild `?next=` — see §4.5.
+    const headers = new Headers(request.headers)
+    headers.set('x-pathname', pathname)
+    return NextResponse.next({ request: { headers } })
   }
 
   // API routes must 401 from their own handler, never redirect.
@@ -164,14 +172,13 @@ export function proxy(request: NextRequest) {
   }
 
   const url = new URL('/login', request.url)
-  const next = request.nextUrl.pathname + request.nextUrl.search
-  if (next && next !== '/') url.searchParams.set('next', next)
+  if (pathname && pathname !== '/') url.searchParams.set('next', pathname)
   return NextResponse.redirect(url)
 }
 
 export const config = {
   matcher: [
-    '/((?!login|api/login|api/logout|_next/static|_next/image|favicon.ico|robots.txt|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico)$).*)',
+    '/((?!login(?:/|$)|api/login(?:/|$)|api/logout(?:/|$)|_next/static|_next/image|favicon.ico|robots.txt|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico)$).*)',
   ],
 }
 ```
@@ -213,7 +220,13 @@ export const verifySession = cache(async () => {
 
 `react.cache` dedupes the verification within a single render pass, so calling it in a layout and three handlers costs one verify.
 
-The session cookie: `httpOnly`, `secure` in production, `sameSite: 'lax'`, `path: '/'`, 7-day expiry, HS256-signed with `SESSION_SECRET`. `APP_PASSWORD` is compared using a timing-safe comparison. Rate limiting on `/api/login`: 5 attempts per minute per IP, in-memory — adequate for a single-operator tool bound to localhost.
+The session cookie: `httpOnly`, `secure` in production, `sameSite: 'lax'`, `path: '/'`, 7-day expiry, HS256-signed with `SESSION_SECRET`. `APP_PASSWORD` is compared using a timing-safe comparison against the **validated** environment (`assertEnv()`, §14.1) rather than raw `process.env` — `passwordMatches('', '')` is `true`, so a `?? ''` fallback would turn a missing variable into an open door.
+
+Rate limiting on `/api/login` is in-memory, with two tiers: **5 failures in 60s** or **10 in 15 minutes**. A lockout returns the same `401 invalid_credentials` as a wrong password — no `429`, no `Retry-After`, no distinguishable body — so the limiter is invisible to a caller probing it.
+
+> **Correction landed after review (Phase 2).** This read *"5 attempts per minute per IP"*, and the implementation keyed on `x-forwarded-for` → `x-real-ip` → `'local'`. Nothing sits in front of this app (§2 — Next binds loopback directly), so those headers are never set by a proxy and are always caller-supplied: a fresh header value bought a fresh bucket and the tiers never fired. Since this limiter is the only brute-force control over the product's single credential, a bypassable one is worse than none. It is now **one global bucket, not per-IP** — which is also the honest model for a tool with exactly one operator. Do not reintroduce per-IP keying without a real reverse proxy and an explicit trusted-proxy setting.
+
+Because the limiter is deliberately indistinguishable from a wrong password, **the client must not render a countdown.** An earlier login form tracked failures in component state and drew a timer from them; that counter reset on every reload and never decayed, so it both hid real lockouts behind a bare "Incorrect password" and invented lockouts that had already expired. The form now shows a static line saying repeated failures are throttled.
 
 ### 4.3 Uploads go through Route Handlers, not Server Actions
 
@@ -247,6 +260,21 @@ export default async function CampaignPage({
 }
 ```
 
+### 4.5 Returning the operator to where they were
+
+There are **two** ways to arrive at `/login`, and they need different machinery:
+
+| Case | Detected by | How `next` survives |
+|---|---|---|
+| No cookie at all | `proxy.ts` | Built straight into the redirect URL |
+| Cookie present but invalid — expired, tampered, or signed with a rotated secret | `app/(app)/layout.tsx`, via the DAL | `x-pathname` header, set by the proxy |
+
+The second case exists because the proxy check is presence-only (§4.1) and cannot tell a valid cookie from a dead one — only `verifySession()` can. A layout receives no pathname of its own, so the proxy forwards one on the request headers, which is the mechanism the framework prescribes: *"To pass information from Proxy to your application, use headers, cookies, rewrites, redirects, or the URL"* (`proxy.md`). Every session expires after seven days, so this is the ordinary path, not an edge case.
+
+Both sources are attacker-influenceable — a query string always, and a header because the proxy copies it out of the request URL — so **both go through one sanitizer**, `lib/next-path.ts`. A value is accepted only if it is origin-relative (`/…`), not protocol-relative (`//evil.com`, and `/\evil.com` since browsers normalize `\` to `/`), and free of control characters that could split a `Location` header. Anything else becomes `/`.
+
+Keeping one function rather than two is the point: a second, unchecked source of a redirect target is how open redirects appear.
+
 ---
 
 ## 5. Import pipeline
@@ -270,7 +298,9 @@ Applied in order, on `website_url`:
 4. Strip tracking parameters: `utm_*`, `fbclid`, `gclid`, `msclkid`, `ref`, `mc_cid`, `mc_eid`.
 5. Drop a trailing slash on a bare-host URL.
 6. Store the result in `leads.website_url` **with `www.` intact**.
-7. Compute `leads.domain = normalize_domain(website_url)` (`DB.md` §4.3), which additionally strips `www.`. This is the dedupe key only — the difference keeps the displayed URL faithful to the CSV while making the key stable.
+7. Compute `leads.domain = normalize_domain(new URL(website_url).hostname)` (`DB.md` §4.3), which additionally strips `www.`. This is the dedupe key only — the difference keeps the displayed URL faithful to the CSV while making the key stable.
+
+> **Correction landed after review.** This step read `normalize_domain(website_url)` — the full URL — while `DB.md` §4.3 stated that only a host ever reaches the function, which stripped nothing but the scheme and `www.`. Following this document literally would have keyed `https://acme.com/about-us` as `acme.com/about-us` and silently failed to dedupe it against `/contact`. The importer now passes the host, *and* the function was hardened to cut path, query, fragment and port itself (`DB.md` §4.3). Belt and braces on the key a hundred leads per batch are matched on.
 
 **Social-only URLs** — host matching `facebook.com`, `instagram.com`, `linkedin.com`, `twitter.com`, `x.com`, `tiktok.com`, `youtube.com`, `yelp.com`, or a known directory host — are not websites we can record. The lead is imported and its `campaign_leads` row is created with `status='skipped'`, `error_code='not_a_website'`. Importing rather than discarding keeps the row visible and countable; the Admin may later fix the URL and requeue.
 
@@ -801,10 +831,16 @@ npm run worker
   "worker": "tsx --env-file-if-exists=.env.local worker/index.ts",
   "seed": "tsx --env-file-if-exists=.env.local scripts/seed.ts",
   "typecheck": "tsc --noEmit",
+  "test": "node --import tsx --test \"lib/**/*.test.ts\"",
   "verify:imports": "tsx scripts/verify-imports.ts",
+  "verify:auth": "tsx --env-file-if-exists=.env.local scripts/verify-auth.ts",
   "lint": "eslint"
 }
 ```
+
+**Two levels of verification, deliberately separate.** `npm test` is `node --test` over the pure logic — the login throttle's tiers, `env.ts`'s absent-vs-invalid reporting, the redirect sanitizer of §4.5, and session sign/verify. It needs no server, no database and no `.env.local`, so it runs on a fresh clone. `npm run verify:auth` asserts the wire contract of §4 against a **running** dev server and cannot be run without one.
+
+`verify:auth` deliberately trips the throttle (it asserts that a correct password during a lockout still returns an identical `401`), which leaves the in-memory limiter poisoned for up to fifteen minutes. **Restart the dev server before a manual browser pass**, or the first real login will look broken. `node --test` is used rather than a framework because `tsx` is already a dependency — there is no runner to install.
 
 **`--env-file-if-exists` is load-bearing.** Next.js loads `.env.local` automatically; `tsx` does not. Without the flag the worker starts with an empty environment and fails its own startup check, which looks like a configuration bug and is not one. The `-if-exists` variant (Node 22+) means a missing file is a warning rather than a crash, so CI and a fresh clone still run.
 
