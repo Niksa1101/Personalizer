@@ -9,6 +9,7 @@
     "worker": "tsx --env-file-if-exists=.env.local worker/index.ts",
     "seed": "tsx --env-file-if-exists=.env.local scripts/seed.ts",
     "typecheck": "tsc --noEmit",
+    "test": "node --import tsx --test \"lib/**/*.test.ts\"",
     "verify:imports": "tsx scripts/verify-imports.ts",
     "verify:auth": "tsx --env-file-if-exists=.env.local scripts/verify-auth.ts",
     "lint": "eslint"
