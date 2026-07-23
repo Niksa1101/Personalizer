@@ -5,7 +5,6 @@ import { usePathname } from "next/navigation"
 import { Sparkles } from "lucide-react"
 
 import { SignOutButton } from "@/components/sign-out-button"
-import { ThemeToggle } from "@/components/theme-toggle"
 import {
   Sidebar,
   SidebarContent,
@@ -74,10 +73,7 @@ export function AppSidebar() {
               <span className="truncate text-xs text-muted-foreground group-data-[collapsible=icon]:hidden">
                 Admin
               </span>
-              <div className="flex items-center gap-1">
-                <ThemeToggle />
-                <SignOutButton />
-              </div>
+              <SignOutButton />
             </div>
           </SidebarMenuItem>
         </SidebarMenu>
