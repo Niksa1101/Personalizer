@@ -4,6 +4,10 @@
 -- One transaction per batch: insert import_batches, loop rows, dedupe against
 -- live DB + intra-file keys, insert leads/campaign_leads/events, tally counts.
 -- Dry-run mode computes the same outcomes without writing.
+--
+-- Step-3 contract: p_batch->>'slug' is inserted verbatim into import_batches.slug
+-- (UNIQUE NOT NULL). The /api/import route must supply a unique batch slug before
+-- calling this function — mirror resolveUniqueSlug() in lib/campaigns.ts.
 
 CREATE OR REPLACE FUNCTION public.import_commit(
   p_campaign_id uuid,
@@ -43,6 +47,7 @@ DECLARE
   v_exists_company      text;
   v_exists_domain       text;
   v_exists_email        text;
+  v_exists_lead_ids     uuid[] := ARRAY[]::uuid[];
 BEGIN
   IF NOT EXISTS (SELECT 1 FROM public.campaigns WHERE id = p_campaign_id) THEN
     RAISE EXCEPTION 'campaign not found: %', p_campaign_id;
@@ -134,6 +139,9 @@ BEGIN
       LIMIT 1;
     END IF;
 
+    -- Existing lead match (domain or email). A social-only URL that matches by
+    -- email is linked on purpose — the email identifies the same business and
+    -- reuses its recording rather than creating a skipped row.
     IF v_existing_lead_id IS NOT NULL THEN
       SELECT EXISTS (
         SELECT 1 FROM public.campaign_leads cl
@@ -148,7 +156,8 @@ BEGIN
       WHERE cl.lead_id = v_existing_lead_id
         AND cl.campaign_id <> p_campaign_id;
 
-      IF jsonb_array_length(v_other_campaigns) > 0 THEN
+      IF jsonb_array_length(v_other_campaigns) > 0
+         AND NOT (v_existing_lead_id = ANY(v_exists_lead_ids)) THEN
         SELECT l.company, l.domain, l.email::text
         INTO v_exists_company, v_exists_domain, v_exists_email
         FROM public.leads l WHERE l.id = v_existing_lead_id;
@@ -160,12 +169,15 @@ BEGIN
           'campaigns', v_other_campaigns
         );
         v_exists_list := v_exists_list || v_exists_entry;
+        v_exists_lead_ids := array_append(v_exists_lead_ids, v_existing_lead_id);
       END IF;
 
       IF v_in_campaign THEN
         v_outcome := 'duplicate';
         v_duplicate := v_duplicate + 1;
       ELSE
+        -- Linked: newer CSV row data is intentionally not persisted on the lead;
+        -- provenance for this campaign membership is campaign_leads.batch_id.
         v_outcome := 'linked';
         v_linked := v_linked + 1;
 
@@ -341,11 +353,14 @@ STABLE
 SET search_path = ''
 AS $slug$
 DECLARE
-  v_name   text;
-  v_city   text;
-  v_base   text;
-  v_slug   text;
-  v_ref    text;
+  v_name         text;
+  v_city         text;
+  v_base         text;
+  v_slug         text;
+  v_ref          text;
+  v_hash         text;
+  v_attempt      integer := 0;
+  v_max_attempts constant integer := 20;
 BEGIN
   v_city := nullif(btrim(p_row->>'city'), '');
 
@@ -376,13 +391,19 @@ BEGIN
   END IF;
 
   v_slug := v_base;
+  v_hash := left(replace(p_cl_id::text, '-', ''), 6);
 
-  IF EXISTS (
+  WHILE EXISTS (
     SELECT 1 FROM public.campaign_leads cl
     WHERE cl.campaign_id = p_campaign_id AND cl.slug = v_slug
-  ) THEN
-    v_slug := v_base || '-' || left(replace(p_cl_id::text, '-', ''), 6);
-  END IF;
+  ) AND v_attempt < v_max_attempts LOOP
+    v_attempt := v_attempt + 1;
+    IF v_attempt = 1 THEN
+      v_slug := v_base || '-' || v_hash;
+    ELSE
+      v_slug := v_base || '-' || v_hash || '-' || v_attempt::text;
+    END IF;
+  END LOOP;
 
   RETURN v_slug;
 END $slug$;

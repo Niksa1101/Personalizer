@@ -304,7 +304,7 @@ Applied in order, on `website_url`:
 
 > **Correction landed after review.** This step read `normalize_domain(website_url)` — the full URL — while `DB.md` §4.3 stated that only a host ever reaches the function, which stripped nothing but the scheme and `www.`. Following this document literally would have keyed `https://acme.com/about-us` as `acme.com/about-us` and silently failed to dedupe it against `/contact`. The importer now passes the host, *and* the function was hardened to cut path, query, fragment and port itself (`DB.md` §4.3). Belt and braces on the key a hundred leads per batch are matched on.
 
-**Social-only URLs** — host matching `facebook.com`, `instagram.com`, `linkedin.com`, `twitter.com`, `x.com`, `tiktok.com`, `youtube.com`, `yelp.com`, or a known directory host — are not websites we can record. The lead is imported and its `campaign_leads` row is created with `status='skipped'`, `error_code='not_a_website'`. Importing rather than discarding keeps the row visible and countable; the Admin may later fix the URL and requeue.
+**Social-only URLs** — host matching `facebook.com`, `instagram.com`, `linkedin.com`, `twitter.com`, `x.com`, `tiktok.com`, `youtube.com`, `yelp.com`, or a known directory host — are not websites we can record. The lead is imported and its `campaign_leads` row is created with `status='skipped'`, `error_code='not_a_website'`. Importing rather than discarding keeps the row visible and countable; the Admin may later fix the URL and requeue. When a social-only URL's email matches an existing lead, the row is **linked** to that lead (not skipped) — the email identifies the same business and reuses its recording.
 
 ### 5.3 Dedupe
 
@@ -312,7 +312,7 @@ Global, on normalized domain **or** email, per `DB.md` §6.1. For each parsed ro
 
 1. Look up an existing lead by `domain`, then by `email`.
 2. **No match** → insert `leads` + `campaign_leads`; increment `imported_count`.
-3. **Match, not in this campaign** → insert `campaign_leads` only, reusing the existing lead and its recording; increment `linked_count`. Surface *"already exists in campaign X"* in the import report — informational, not an error. Existing lead fields are **not** overwritten; the newer row's data lands in `leads.raw` for inspection.
+3. **Match, not in this campaign** → insert `campaign_leads` only, reusing the existing lead and its recording; increment `linked_count`. Surface *"already exists in campaign X"* in the import report — informational, not an error. Existing lead fields are **not** overwritten; the newer CSV row is **not** persisted on the lead. Provenance for this campaign membership is `campaign_leads.batch_id`.
 4. **Match, already in this campaign** → skip; increment `duplicate_count`. The `UNIQUE (campaign_id, lead_id)` constraint is the backstop if a concurrent import races this check.
 
 The Admin decides what to do about cross-campaign matches. The importer never merges records on its own.
