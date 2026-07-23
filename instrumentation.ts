@@ -22,4 +22,10 @@ export async function register() {
   // refuses the boot — `register()` must complete before the server is ready.
   const { assertEnv } = await import('./lib/env')
   assertEnv()
+
+  if (process.env.NEXT_RUNTIME === 'nodejs') {
+    const { storageAbs } = await import('./lib/storage')
+    const { sweepStaleIntroUploadTemps } = await import('./lib/local-file')
+    await sweepStaleIntroUploadTemps(storageAbs('tmp'))
+  }
 }

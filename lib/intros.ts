@@ -1,9 +1,9 @@
 import "server-only"
 
-import { unlink } from "node:fs/promises"
-
 import type { IntroVideoRow } from "@/lib/intro-types"
+import { reconcileIntroCampaignSelection } from "@/lib/intro-types"
 import type { Json } from "@/lib/database.types"
+import { removeIfExists } from "@/lib/local-file"
 import { introPosterRelPath, introRelPath, storageAbs } from "@/lib/storage"
 import { getSupabaseAdmin } from "@/lib/supabase"
 
@@ -139,33 +139,42 @@ export async function renameIntro(id: string, name: string): Promise<IntroVideoR
   return data
 }
 
-export async function assignIntroToCampaigns(
+export async function setIntroCampaigns(
   introId: string,
-  campaignIds: string[],
-): Promise<void> {
-  const { error } = await getSupabaseAdmin()
-    .from("campaigns")
-    .update({ intro_video_id: introId })
-    .in("id", campaignIds)
+  selectedIds: string[],
+): Promise<string[]> {
+  const presented = await listAssignableCampaigns()
+  const presentedIds = presented.map((campaign) => campaign.id)
+  const { selected, deselected } = reconcileIntroCampaignSelection(
+    presentedIds,
+    selectedIds,
+  )
 
-  if (error) {
-    throw new Error(`Failed to assign intro to campaigns: ${error.message}`)
-  }
-}
+  // Two sequential updates — no cross-statement transaction (consistent with other app writes).
+  if (selected.length > 0) {
+    const { error } = await getSupabaseAdmin()
+      .from("campaigns")
+      .update({ intro_video_id: introId })
+      .in("id", selected)
 
-async function removeIfExists(filePath: string): Promise<void> {
-  try {
-    await unlink(filePath)
-  } catch (error) {
-    if (
-      error instanceof Error &&
-      "code" in error &&
-      (error as NodeJS.ErrnoException).code === "ENOENT"
-    ) {
-      return
+    if (error) {
+      throw new Error(`Failed to assign intro to campaigns: ${error.message}`)
     }
-    throw error
   }
+
+  if (deselected.length > 0) {
+    const { error } = await getSupabaseAdmin()
+      .from("campaigns")
+      .update({ intro_video_id: null })
+      .in("id", deselected)
+      .eq("intro_video_id", introId)
+
+    if (error) {
+      throw new Error(`Failed to clear intro from campaigns: ${error.message}`)
+    }
+  }
+
+  return [...new Set([...selected, ...deselected])]
 }
 
 export async function deleteIntro(id: string): Promise<void> {

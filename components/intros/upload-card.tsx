@@ -13,6 +13,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
+import { INTRO_MAX_UPLOAD_BYTES } from "@/lib/intro-types"
 
 export function UploadCard() {
   const router = useRouter()
@@ -23,6 +24,13 @@ export function UploadCard() {
     const file = event.target.files?.[0]
     event.target.value = ""
     if (!file) return
+
+    if (file.size > INTRO_MAX_UPLOAD_BYTES) {
+      toast.error(
+        "This video is over 500 MB — trim or re-export it smaller.",
+      )
+      return
+    }
 
     setBusy(true)
     try {

@@ -9,10 +9,10 @@ import {
   renameIntroSchema,
 } from "@/lib/intro-types"
 import {
-  assignIntroToCampaigns,
   deleteIntro,
   IntroInUseError,
   renameIntro,
+  setIntroCampaigns,
 } from "@/lib/intros"
 
 export type IntroActionState = {
@@ -84,15 +84,15 @@ export async function deleteIntroAction(introId: string): Promise<IntroActionSta
   }
 }
 
-export async function assignIntroToCampaignsAction(
+export async function setIntroCampaignsAction(
   introId: string,
-  campaignIds: string[],
+  selectedIds: string[],
 ): Promise<IntroActionState> {
   await verifySession()
 
   let parsed
   try {
-    parsed = assignIntroSchema.parse({ introId, campaignIds })
+    parsed = assignIntroSchema.parse({ introId, selectedIds })
   } catch (error) {
     if (error instanceof z.ZodError) {
       return { fieldErrors: zodFieldErrors(error) }
@@ -101,16 +101,16 @@ export async function assignIntroToCampaignsAction(
   }
 
   try {
-    await assignIntroToCampaigns(parsed.introId, parsed.campaignIds)
+    const affectedIds = await setIntroCampaigns(parsed.introId, parsed.selectedIds)
     revalidatePath("/intros")
     revalidatePath("/campaigns")
-    for (const campaignId of parsed.campaignIds) {
+    for (const campaignId of affectedIds) {
       revalidatePath(`/campaigns/${campaignId}`)
     }
     return {}
   } catch (error) {
     return actionError(
-      error instanceof Error ? error.message : "Failed to assign intro",
+      error instanceof Error ? error.message : "Failed to update campaign intros",
     )
   }
 }

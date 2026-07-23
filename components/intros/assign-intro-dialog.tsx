@@ -3,7 +3,7 @@
 import { useState } from "react"
 import { toast } from "sonner"
 
-import { assignIntroToCampaignsAction } from "@/app/(app)/intros/actions"
+import { setIntroCampaignsAction } from "@/app/(app)/intros/actions"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
 import {
@@ -35,13 +35,16 @@ export function AssignIntroDialog({
   const [selected, setSelected] = useState<string[]>([])
   const [busy, setBusy] = useState(false)
 
+  const initiallyAssigned =
+    intro === null
+      ? []
+      : campaigns
+          .filter((campaign) => campaign.intro_video_id === intro.id)
+          .map((campaign) => campaign.id)
+
   function handleOpenChange(next: boolean) {
     if (next && intro) {
-      setSelected(
-        campaigns
-          .filter((campaign) => campaign.intro_video_id === intro.id)
-          .map((campaign) => campaign.id),
-      )
+      setSelected(initiallyAssigned)
     }
     onOpenChange(next)
   }
@@ -54,10 +57,22 @@ export function AssignIntroDialog({
     )
   }
 
-  async function handleAssign() {
-    if (!intro || selected.length === 0) return
+  async function handleSave() {
+    if (!intro) return
+
+    const clearingAll =
+      initiallyAssigned.length > 0 && selected.length === 0
+    if (
+      clearingAll &&
+      !window.confirm(
+        `Remove "${intro.name}" from all ${initiallyAssigned.length} campaign${initiallyAssigned.length === 1 ? "" : "s"}?`,
+      )
+    ) {
+      return
+    }
+
     setBusy(true)
-    const result = await assignIntroToCampaignsAction(intro.id, selected)
+    const result = await setIntroCampaignsAction(intro.id, selected)
     setBusy(false)
 
     if (result.error) {
@@ -65,7 +80,11 @@ export function AssignIntroDialog({
       return
     }
 
-    toast.success("Intro assigned to selected campaigns")
+    toast.success(
+      selected.length === 0
+        ? "Intro removed from selected campaigns"
+        : "Campaign intro assignments updated",
+    )
     onOpenChange(false)
   }
 
@@ -75,15 +94,15 @@ export function AssignIntroDialog({
         <DialogHeader>
           <DialogTitle>Assign to campaigns</DialogTitle>
           <DialogDescription>
-            Set <strong>{intro?.name}</strong> as the intro for each selected
-            campaign.
+            Choose which campaigns use <strong>{intro?.name}</strong> as their
+            intro. Checked campaigns get this intro; unchecked ones lose it.
           </DialogDescription>
         </DialogHeader>
 
         <FieldDescription className="px-0">
-          Changing a campaign&apos;s intro does not re-merge videos already
-          built; it applies only to leads not yet merged. Assigning an intro
-          writes the FK only — resume/enqueue is Phase 7.
+          This adds and removes the intro on the campaigns shown here. Changing
+          a campaign&apos;s intro does not re-merge videos already built; it
+          applies only to leads not yet merged. Resume/enqueue is Phase 7.
         </FieldDescription>
 
         <div className="max-h-64 space-y-3 overflow-y-auto py-2">
@@ -118,10 +137,10 @@ export function AssignIntroDialog({
             Cancel
           </DialogClose>
           <Button
-            disabled={busy || selected.length === 0 || campaigns.length === 0}
-            onClick={handleAssign}
+            disabled={busy || campaigns.length === 0}
+            onClick={handleSave}
           >
-            {busy ? "Assigning…" : "Assign intro"}
+            {busy ? "Saving…" : "Save assignments"}
           </Button>
         </DialogFooter>
       </DialogContent>
