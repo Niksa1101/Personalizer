@@ -1,19 +1,17 @@
 "use client"
 
 import { useEffect } from "react"
-import { useRouter, useSearchParams } from "next/navigation"
+import { usePathname, useRouter, useSearchParams } from "next/navigation"
 import { toast } from "sonner"
 
 const TOAST_MESSAGES: Record<string, { message: string; type: "success" | "info" }> = {
   created: { message: "Campaign created", type: "success" },
   deleted: { message: "Campaign deleted", type: "success" },
-  archived: { message: "Campaign archived", type: "success" },
-  unarchived: { message: "Campaign unarchived", type: "success" },
-  saved: { message: "Changes saved", type: "success" },
 }
 
 export function CampaignToastHandler() {
   const searchParams = useSearchParams()
+  const pathname = usePathname()
   const router = useRouter()
 
   useEffect(() => {
@@ -29,8 +27,8 @@ export function CampaignToastHandler() {
     const next = new URLSearchParams(searchParams.toString())
     next.delete("toast")
     const query = next.toString()
-    router.replace(query ? `?${query}` : ".", { scroll: false })
-  }, [router, searchParams])
+    router.replace(query ? `${pathname}?${query}` : pathname, { scroll: false })
+  }, [pathname, router, searchParams])
 
   return null
 }

@@ -32,18 +32,30 @@ type RecorderTabProps = {
 
 const initialState: CampaignActionState = {}
 
+const CUSTOM_PRESET = "custom"
+
 function presetKey(width: number, height: number): string {
   return `${width}x${height}`
+}
+
+function isPresetMatch(width: number, height: number): boolean {
+  return VIEWPORT_PRESETS.some(
+    (preset) => preset.width === width && preset.height === height,
+  )
 }
 
 function findPresetKey(width: number, height: number): string {
   const match = VIEWPORT_PRESETS.find(
     (preset) => preset.width === width && preset.height === height,
   )
-  return match ? presetKey(match.width, match.height) : presetKey(1920, 1080)
+  return match ? presetKey(match.width, match.height) : CUSTOM_PRESET
 }
 
 export function RecorderTab({ campaign }: RecorderTabProps) {
+  const initialIsCustom = !isPresetMatch(
+    campaign.viewport_width,
+    campaign.viewport_height,
+  )
   const [advancedOpen, setAdvancedOpen] = useState(false)
   const [preset, setPreset] = useState(
     findPresetKey(campaign.viewport_width, campaign.viewport_height),
@@ -66,7 +78,7 @@ export function RecorderTab({ campaign }: RecorderTabProps) {
   }, [pending, state])
 
   function handlePresetChange(value: string | null) {
-    if (!value) return
+    if (!value || value === CUSTOM_PRESET) return
     setPreset(value)
     const matched = VIEWPORT_PRESETS.find(
       (item) => presetKey(item.width, item.height) === value,
@@ -109,6 +121,11 @@ export function RecorderTab({ campaign }: RecorderTabProps) {
                       {item.label} ({item.width}×{item.height})
                     </SelectItem>
                   ))}
+                  {initialIsCustom ? (
+                    <SelectItem value={CUSTOM_PRESET}>
+                      Custom ({campaign.viewport_width}×{campaign.viewport_height})
+                    </SelectItem>
+                  ) : null}
                 </SelectContent>
               </Select>
               <input type="hidden" name="viewport_width" value={viewportWidth} />
