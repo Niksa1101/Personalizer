@@ -228,6 +228,8 @@ Rate limiting on `/api/login` is in-memory, with two tiers: **5 failures in 60s*
 
 Because the limiter is deliberately indistinguishable from a wrong password, **the client must not render a countdown.** An earlier login form tracked failures in component state and drew a timer from them; that counter reset on every reload and never decayed, so it both hid real lockouts behind a bare "Incorrect password" and invented lockouts that had already expired. The form now shows a static line saying repeated failures are throttled.
 
+State-changing Route Handlers also call `checkOrigin()` (D44): the `Origin` header must match `request.url`'s origin. **`lib/origin.ts` `originsMatch()`** normalizes loopback aliases (`localhost`, `127.0.0.1`, `::1`) to the same key so a browser at `http://localhost:3000` is not rejected when the server bound to `127.0.0.1` reports that host.
+
 ### 4.3 Uploads go through Route Handlers, not Server Actions
 
 > **Framework note — what changed and why.** The plan routed uploads through Server Actions. Those cap request bodies: *"Action requests are capped at 1MB by default"* (`01-app/02-guides/server-actions.md:83`). An intro video is tens of megabytes. Raising `serverActions.bodySizeLimit` would apply the higher ceiling to *every* action in the app, which is a worse trade than moving two endpoints. Route Handlers have no equivalent documented default limit and are *"not cached by default"* (`01-app/01-getting-started/15-route-handlers.md:51`), so always-fresh admin data needs no opt-out.
@@ -755,7 +757,7 @@ Additionally, set **`NEXT_SERVER_ACTIONS_ENCRYPTION_KEY`** in production: closur
 
 ### 14.2 Settings resolution
 
-**Lead override → campaign value → global `settings` default.** Null means inherit, which is why override columns are nullable rather than defaulted (`DB.md` §5.4). `lib/settings.ts` exposes one resolver; no other module reads `settings` directly.
+**Lead override → campaign value → global `settings` default.** Null means inherit, which is why override columns are nullable rather than defaulted (`DB.md` §5.4). `lib/settings.ts` exposes `resolveSetting` (single key) and `resolveMany` (batch, with a **per-key** override map); no other module reads `settings` directly.
 
 ### 14.3 `next.config.ts`
 

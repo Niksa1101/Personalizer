@@ -9,6 +9,7 @@ import {
   verifySessionToken,
   type SessionPayload,
 } from '@/lib/session'
+import { originsMatch } from '@/lib/origin'
 
 export class UnauthorizedError extends Error {
   constructor(message = 'Unauthorized') {
@@ -69,7 +70,7 @@ export function checkOrigin(request: Request): Response | null {
   if (!origin) return null
 
   const requestOrigin = new URL(request.url).origin
-  if (origin !== requestOrigin) {
+  if (!originsMatch(origin, requestOrigin)) {
     return Response.json({ error: 'forbidden' }, { status: 403 })
   }
 

@@ -438,10 +438,28 @@ Also: the login form's lockout countdown was deleted. It was driven by a client-
 | Criterion | Result |
 |---|---|
 | Every screen in §6 reachable and renders an empty state | ✅ Sidebar navigation (Work / Setup / System) links to all eight routes plus `/campaigns/[id]` placeholder. Each screen renders a screen-specific `<EmptyState>`. |
-| No screen throws | ✅ All routes return 200 with a valid session; `/campaigns/<any-id>` renders without querying. `(app)/error.tsx` and `(app)/not-found.tsx` in place. |
+| No screen throws | ✅ All routes return 200 with a valid session; `/campaigns/<any-id>` renders without querying. `(app)/error.tsx`, `(app)/not-found.tsx`, and root `app/not-found.tsx` (unmatched top-level URLs) in place. |
 | Supabase client unreachable from client components | ✅ `lib/supabase.ts` leads with `import 'server-only'`. `npm run verify:server-only` writes a temp `"use client"` importer, asserts the build fails citing `server-only`, and cleans up. |
 
 **Also landed:** `lib/settings.ts` (14-key typed resolver with `react.cache`), `lib/nav.ts`, theme toggle (light/dark/system), `npm run verify:shell`.
+
+---
+
+#### Corrections landed after review of Phase 3 (2026-07-23)
+
+The Phase 3 commit was solid and non-blocking — Base UI `render={…}` usage is correct, `server-only` is enforced with a negative build test, and SSR-safe patterns hold throughout. Six nits and one API-design fix landed before Phase 4:
+
+1. **`resolveMany` applied one override set to every key.** The signature is now a per-key map (`Partial<Record<K, SettingOverrides<K>>>`); each key resolves with its own entry. `resolveSetting` and single-key `SettingOverrides<K>` are unchanged.
+
+2. **Unmatched top-level URLs hit Next's default 404.** Root `app/not-found.tsx` reuses the branded `EmptyState` (outside `SidebarProvider`, so no sidebar chrome).
+
+3. **`parseSettingValue` duplicate branch removed; validation comment added.** `merge.pip_scale` shares the numeric case group; a comment notes range/integer checks are deferred to the Settings write path.
+
+4. **Dead spacer removed from `SiteHeader`.** The trailing `ml-auto` div pushed nothing.
+
+5. **CSRF origin check failed across loopback aliases.** `checkOrigin()` now compares via `lib/origin.ts` `originsMatch()`, normalizing `localhost`, `127.0.0.1`, and `::1` to the same key so signing in at `http://localhost:3000` works when the server reports `http://127.0.0.1:3000` in `request.url` (`npm run dev` binds loopback).
+
+No schema changes — `db push` is a no-op.
 
 ---
 
