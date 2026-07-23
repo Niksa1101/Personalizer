@@ -1,11 +1,22 @@
-import { SignOutButton } from "@/components/sign-out-button"
+import { LayoutDashboard } from "lucide-react"
 
-export default function DashboardPage() {
+import { EmptyState, PhaseAction } from "@/components/empty-state"
+
+export const metadata = {
+  title: "Dashboard",
+}
+
+export default async function DashboardPage() {
   return (
-    <main className="flex flex-1 flex-col gap-4 p-6">
-      <h1 className="text-2xl font-semibold">Dashboard</h1>
-      <p className="text-muted-foreground">Phase 3 will build this screen.</p>
-      <SignOutButton />
-    </main>
+    <div className="flex flex-1 flex-col items-center justify-center p-6">
+      <EmptyState
+        icon={<LayoutDashboard />}
+        title="Create your first campaign"
+        description="Campaigns organize intro videos, merge settings, and landing pages for each batch of leads."
+        action={
+          <PhaseAction label="Create campaign" phase={4} />
+        }
+      />
+    </div>
   )
 }

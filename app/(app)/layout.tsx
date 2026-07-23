@@ -1,6 +1,9 @@
 import { headers } from "next/headers"
 import { redirect } from "next/navigation"
 
+import { AppSidebar } from "@/components/app-sidebar"
+import { SiteHeader } from "@/components/site-header"
+import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar"
 import { UnauthorizedError, verifySession } from "@/lib/dal"
 import { loginUrlFor } from "@/lib/next-path"
 
@@ -23,5 +26,13 @@ export default async function AppLayout({
     throw error
   }
 
-  return <div className="flex flex-1 flex-col">{children}</div>
+  return (
+    <SidebarProvider>
+      <AppSidebar />
+      <SidebarInset>
+        <SiteHeader />
+        <main className="flex flex-1 flex-col">{children}</main>
+      </SidebarInset>
+    </SidebarProvider>
+  )
 }

@@ -28,7 +28,7 @@ It has been run. `components.json` records the result and is the source of truth
 
 **Rules:**
 
-- Add components with `npx shadcn@latest add <component>`. Never hand-write a file into `components/ui/` and never copy-paste component source.
+- Add **every** UI component — including ones not in the preset — with `npx shadcn@latest add <component>`. Never hand-write a file into `components/ui/` and never copy-paste component source from memory or the shadcn docs site.
 - Never introduce a second component library — no MUI, Chakra, Mantine, Ant, DaisyUI, or Headless UI.
 - Icons come from `lucide-react`. Do not add another icon set.
 - Never override the preset's theme tokens with ad-hoc Tailwind colors. Use the semantic tokens the preset installs (`bg-background`, `text-muted-foreground`, `border-border`, …).

@@ -46,6 +46,21 @@ npm run verify:auth
 
 `verify:auth` deliberately trips the throttle, so **restart the dev server afterwards** before signing in through the browser — otherwise the first real login looks broken.
 
+## App shell / navigation & theming
+
+After sign-in, every screen is reachable from the sidebar, grouped **Work** (Dashboard, Leads, Queue), **Setup** (Campaigns, Intro Videos, Import), and **System** (Logs, Settings). Each screen shows a purpose-specific empty state until its phase lands.
+
+- **Theme:** light / dark / system via the toggle in the sidebar footer. Preference persists across reloads (`next-themes`).
+- **Sign out:** sidebar footer, next to the theme toggle.
+- **Verify the shell** (dev server must already be running):
+
+```bash
+npm run verify:shell
+npm run verify:server-only
+```
+
+`verify:shell` GETs all eight routes plus a sample campaign detail URL and asserts 200 with no error boundary. `verify:server-only` proves a client import of `lib/supabase.ts` fails the build.
+
 ## Scripts
 
 | Command | Purpose |
@@ -55,6 +70,8 @@ npm run verify:auth
 | `npm run typecheck` | TypeScript check |
 | `npm test` | Unit tests (`node --test`) — throttle, env validation, redirect sanitation, sessions |
 | `npm run verify:auth` | Auth assertions against a live dev server |
+| `npm run verify:shell` | Shell route reachability against a live dev server |
+| `npm run verify:server-only` | Negative build test — client import of Supabase client must fail |
 | `npm run verify:imports` | Dependency and binary smoke test |
 | `npm run seed` | Seed demo data (requires Supabase) |
 | `npm run worker` | Background job worker |

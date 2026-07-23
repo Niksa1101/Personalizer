@@ -16,7 +16,7 @@
 | Language | TypeScript | ^5 | **5.1+ required** |
 | Node | Node.js | **≥ 20.9.0** | Hard floor, see §1.1 |
 | Styling | Tailwind CSS | v4 (`@tailwindcss/postcss`) | PostCSS plugin, no `tailwind.config.js` |
-| Components | shadcn/ui (preset `bKsEuMcK`) | style `base-luma` | Primitives are **`@base-ui/react` — Base UI, not Radix**. Icons `lucide-react`. See `AGENTS.md`. |
+| Components | shadcn/ui (preset `bKsEuMcK`) | style `base-luma` | Primitives are **`@base-ui/react` — Base UI, not Radix**. Add **all** components via `npx shadcn@latest add`; never hand-write into `components/ui/`. Icons `lucide-react`. See `AGENTS.md`. |
 | Tables | TanStack Table | v8 | Leads grid |
 | Database | Supabase (PostgreSQL **17**) | — | Server-side only, service role key. Draft 1 said 15; the provisioned project is 17 and nothing in `DB.md` depended on the difference. |
 | Queue | BullMQ + Redis (Docker) | — | Alternative in §7.6 |
