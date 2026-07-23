@@ -13,6 +13,7 @@
     "verify:imports": "tsx scripts/verify-imports.ts",
     "verify:auth": "tsx --env-file-if-exists=.env.local scripts/verify-auth.ts",
     "verify:shell": "tsx --env-file-if-exists=.env.local scripts/verify-shell.ts",
+    "verify:campaigns": "tsx --env-file-if-exists=.env.local scripts/verify-campaigns.ts",
     "verify:server-only": "tsx scripts/verify-server-only.ts",
     "lint": "eslint"
   },
