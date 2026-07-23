@@ -136,6 +136,14 @@ export type PreviewResult = {
 
 export type CommitReport = ImportBatchRow
 
+export const refreshPreviewSchema = z.object({
+  token: z.string().min(1),
+  campaignId: z.string().uuid(),
+  mapping: z.record(z.string(), z.enum([...IMPORT_FIELDS, UNMAPPED])),
+})
+
+export type RefreshPreviewInput = z.infer<typeof refreshPreviewSchema>
+
 export const commitImportSchema = z.object({
   token: z.string().min(1),
   campaignId: z.string().uuid(),

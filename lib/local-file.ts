@@ -88,6 +88,51 @@ export async function sweepStaleIntroUploadTemps(
   )
 }
 
+/** Remove orphaned import preview temps left by an abandoned wizard. */
+export async function sweepStaleImportUploadTemps(
+  tmpDirAbs: string,
+  maxAgeMs = 24 * 60 * 60 * 1000,
+): Promise<void> {
+  let entries: string[]
+  try {
+    entries = await readdir(tmpDirAbs)
+  } catch (error) {
+    if (
+      error instanceof Error &&
+      "code" in error &&
+      (error as NodeJS.ErrnoException).code === "ENOENT"
+    ) {
+      return
+    }
+    throw error
+  }
+
+  const cutoff = Date.now() - maxAgeMs
+  await Promise.all(
+    entries
+      .filter((name) => name.startsWith("import-") && name.endsWith(".csv"))
+      .map(async (name) => {
+        const filePath = path.join(tmpDirAbs, name)
+        let fileStat
+        try {
+          fileStat = await stat(filePath)
+        } catch (error) {
+          if (
+            error instanceof Error &&
+            "code" in error &&
+            (error as NodeJS.ErrnoException).code === "ENOENT"
+          ) {
+            return
+          }
+          throw error
+        }
+        if (fileStat.mtimeMs < cutoff) {
+          await removeIfExists(filePath)
+        }
+      }),
+  )
+}
+
 /** Stream a local file with optional HTTP Range support (D13). */
 export async function serveLocalFile(
   request: Request,

@@ -107,6 +107,10 @@ describe("normalizeWebsiteUrl", () => {
     )
   })
 
+  it("treats host:port without scheme as https, not a bogus scheme", () => {
+    assert.equal(normalizeWebsiteUrl("acme.com:8080"), "https://acme.com:8080")
+  })
+
   it("returns null for unparseable input", () => {
     assert.equal(normalizeWebsiteUrl(":::bad"), null)
   })

@@ -142,7 +142,7 @@ export function normalizeWebsiteUrl(raw: string | null | undefined): string | nu
   let value = raw.trim().replace(/^["']|["']$/g, "")
   if (!value) return null
 
-  if (!/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(value) && !value.startsWith("//")) {
+  if (!/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(value) && !value.startsWith("//")) {
     value = `https://${value}`
   }
 

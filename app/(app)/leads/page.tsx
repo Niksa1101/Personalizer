@@ -1,6 +1,8 @@
+import Link from "next/link"
 import { Users } from "lucide-react"
 
-import { EmptyState, PhaseAction } from "@/components/empty-state"
+import { Button } from "@/components/ui/button"
+import { EmptyState } from "@/components/empty-state"
 
 export const metadata = {
   title: "Leads",
@@ -13,7 +15,9 @@ export default async function LeadsPage() {
         icon={<Users />}
         title="No leads yet"
         description="Leads appear here after you import a CSV and assign them to a campaign."
-        action={<PhaseAction label="Import CSV" phase={6} />}
+        action={
+          <Button render={<Link href="/import" />}>Import CSV</Button>
+        }
       />
     </div>
   )

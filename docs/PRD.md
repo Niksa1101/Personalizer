@@ -541,6 +541,20 @@ Parse (BOM, delimiter detection, header mapping, ragged-row rejection with 1-bas
 
 **Exit:** importing a 100-row CSV produces correct counts that reconcile to the row count. Re-importing the same file into the same campaign yields 100 duplicates and zero new rows. Importing into a *different* campaign yields 100 links and zero new leads. A ragged row is rejected with the line number a text editor shows.
 
+#### Corrections landed after review of Phase 6 (2026-07-23)
+
+The review found the parse/dedupe/reconcile core sound (clean `tsc`, `eslint`, and the `import-parse` unit suite; `verify:import` covers every exit criterion). One blocker and several smaller items were fixed before Phase 7 opened. The substantive ones:
+
+1. **An applied migration had been edited in place.** `20260723180000_import_commit_fn.sql` was amended to add `import_batches.exists_list`, which `db push` would silently skip on any database that already recorded that version (`DB.md` §9.2). The edit was reverted and the change re-issued as a new forward-only migration, `20260723190000_import_batches_exists_list.sql` — idempotent `ADD COLUMN IF NOT EXISTS` plus a `CREATE OR REPLACE` of `import_commit`. Verified live: the column and the corrected function are present.
+
+2. **`import_commit` was `SECURITY DEFINER` for no reason** — the only caller holds the service role, which already bypasses RLS. Now `SECURITY INVOKER`.
+
+3. **The "already exists in campaign X" list surfaced same-campaign duplicates.** It is now gated to genuinely *linked* rows (`AND NOT v_in_campaign`), matching the report's wording. `DB.md` §5.2 documents the `exists_list` column.
+
+4. **The commit path could report a false failure.** A post-commit reconcile assertion and the audit-CSV move were both able to throw *after* the batch was committed, surfacing a 500 for a succeeded import. Reconcile is now preview-only; the audit-file move is best-effort (logged to `logs`, scope `importer`, never fatal).
+
+Also: three server-rendered dates moved off raw `toLocaleString()` onto a shared `formatDateTime` (`lib/format.ts`, `en-US`) to avoid an SSR hydration mismatch — the fix Phase 4 already applied for `formatDate`; the URL scheme guard no longer misreads `host:port` as a scheme (`acme.com:8080` → `https://acme.com:8080`, unit-tested); and the mapping-change preview refresh is debounced.
+
 ---
 
 ### Stage C — The pipeline

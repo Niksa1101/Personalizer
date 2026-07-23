@@ -176,6 +176,7 @@ export type Database = {
           duplicate_count: number
           skipped_count: number
           rejected_rows: Json
+          exists_list: Json
           delimiter: string | null
           had_bom: boolean
           created_at: string
@@ -191,6 +192,7 @@ export type Database = {
           duplicate_count?: number
           skipped_count?: number
           rejected_rows?: Json
+          exists_list?: Json
           delimiter?: string | null
           had_bom?: boolean
           created_at?: string
@@ -206,6 +208,7 @@ export type Database = {
           duplicate_count?: number
           skipped_count?: number
           rejected_rows?: Json
+          exists_list?: Json
           delimiter?: string | null
           had_bom?: boolean
           created_at?: string

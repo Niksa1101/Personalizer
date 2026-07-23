@@ -369,6 +369,7 @@ One CSV import. Immutable once complete — the audit record of what was brought
 | `rejected_rows` | `jsonb` | no | `'[]'` | `[{row: 14, reason: "ragged row: 7 fields, expected 9"}]` — row numbers are 1-based including the header, matching what the Admin sees in a text editor. |
 | `delimiter` | `text` | yes | — | Auto-detected: `,` `;` or `\t`. Recorded for support. |
 | `had_bom` | `boolean` | no | `false` | |
+| `exists_list` | `jsonb` | no | `'[]'` | Persisted *already exists in campaign X* list (`PRD.md` §6.6); populated for linked rows. |
 | `created_at` | `timestamptz` | no | `now()` | |
 
 The four counts plus rejected rows must account for `row_count`; a mismatch is a bug and worth an assertion in tests, not a database constraint (partial imports would violate it mid-flight).
@@ -888,6 +889,12 @@ supabase/
     -- Added after the Phase 0–2 review (PRD.md §11):
     20260722131125_default_privileges.sql          -- §7.1.2
     20260722131136_normalize_domain_host_only.sql  -- §4.3
+
+    -- Added in Phase 6 (PRD.md §11):
+    20260723180000_import_commit_fn.sql            -- §5.2–5.3 — import_commit() + lead-slug helper
+
+    -- Added after the Phase 6 review (PRD.md §11):
+    20260723190000_import_batches_exists_list.sql  -- §5.2 exists_list + import_commit corrections
   seed.sql                               -- one line: SELECT public.seed_demo_data();
 ```
 
