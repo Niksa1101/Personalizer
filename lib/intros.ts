@@ -1,13 +1,34 @@
 import "server-only"
 
+import { unlink } from "node:fs/promises"
+
 import type { IntroVideoRow } from "@/lib/intro-types"
 import type { Json } from "@/lib/database.types"
+import { introPosterRelPath, introRelPath, storageAbs } from "@/lib/storage"
 import { getSupabaseAdmin } from "@/lib/supabase"
 
 export type { IntroVideoRow } from "@/lib/intro-types"
 
 export type IntroWithUsage = IntroVideoRow & {
   campaigns: { id: string; name: string }[]
+}
+
+export type AssignableCampaign = {
+  id: string
+  name: string
+  intro_video_id: string | null
+}
+
+export class IntroInUseError extends Error {
+  readonly campaigns: { id: string; name: string }[]
+
+  constructor(campaigns: { id: string; name: string }[]) {
+    super(
+      `This intro is used by ${campaigns.map((c) => c.name).join(", ")}. Remove it from those campaigns before deleting.`,
+    )
+    this.name = "IntroInUseError"
+    this.campaigns = campaigns
+  }
 }
 
 export type InsertIntroInput = {
@@ -90,6 +111,102 @@ export async function listIntrosWithUsage(): Promise<IntroWithUsage[]> {
     ...intro,
     campaigns: byIntro.get(intro.id) ?? [],
   }))
+}
+
+export async function listAssignableCampaigns(): Promise<AssignableCampaign[]> {
+  const { data, error } = await getSupabaseAdmin()
+    .from("campaigns")
+    .select("id, name, intro_video_id")
+    .is("archived_at", null)
+    .order("name")
+
+  if (error) {
+    throw new Error(`Failed to list assignable campaigns: ${error.message}`)
+  }
+
+  return data ?? []
+}
+
+export async function renameIntro(id: string, name: string): Promise<IntroVideoRow> {
+  const { data, error } = await getSupabaseAdmin()
+    .from("intro_videos")
+    .update({ name })
+    .eq("id", id)
+    .select("*")
+    .single()
+
+  if (error) throw new Error(`Failed to rename intro video: ${error.message}`)
+  return data
+}
+
+export async function assignIntroToCampaigns(
+  introId: string,
+  campaignIds: string[],
+): Promise<void> {
+  const { error } = await getSupabaseAdmin()
+    .from("campaigns")
+    .update({ intro_video_id: introId })
+    .in("id", campaignIds)
+
+  if (error) {
+    throw new Error(`Failed to assign intro to campaigns: ${error.message}`)
+  }
+}
+
+async function removeIfExists(filePath: string): Promise<void> {
+  try {
+    await unlink(filePath)
+  } catch (error) {
+    if (
+      error instanceof Error &&
+      "code" in error &&
+      (error as NodeJS.ErrnoException).code === "ENOENT"
+    ) {
+      return
+    }
+    throw error
+  }
+}
+
+export async function deleteIntro(id: string): Promise<void> {
+  const campaigns = await campaignsUsingIntro(id)
+  if (campaigns.length > 0) {
+    throw new IntroInUseError(campaigns)
+  }
+
+  const intro = await getIntro(id)
+  if (!intro) return
+
+  await removeIfExists(storageAbs(intro.local_path))
+  if (intro.poster_path) {
+    await removeIfExists(storageAbs(intro.poster_path))
+  }
+
+  const { error } = await getSupabaseAdmin()
+    .from("intro_videos")
+    .delete()
+    .eq("id", id)
+
+  if (error) throw new Error(`Failed to delete intro video: ${error.message}`)
+
+  await getSupabaseAdmin()
+    .from("logs")
+    .insert({
+      level: "info",
+      scope: "web",
+      message: "Intro deleted",
+      meta: { introId: id, name: intro.name } as Json,
+    })
+}
+
+export function introAssetPaths(id: string): {
+  video: string
+  poster: string
+} {
+  return {
+    video: introRelPath(id),
+    poster: introPosterRelPath(id),
+  }
 }
 
 export async function writeWebLog(
