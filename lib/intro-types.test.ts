@@ -4,6 +4,7 @@ import { describe, it } from "node:test"
 import {
   assignIntroSchema,
   nameFromFilename,
+  reconcileIntroCampaignSelection,
   renameIntroSchema,
 } from "./intro-types"
 
@@ -43,19 +44,35 @@ describe("renameIntroSchema", () => {
 })
 
 describe("assignIntroSchema", () => {
-  it("requires at least one campaign", () => {
+  it("accepts an empty selection (remove from all)", () => {
     const result = assignIntroSchema.safeParse({
       introId: "550e8400-e29b-41d4-a716-446655440000",
-      campaignIds: [],
+      selectedIds: [],
     })
-    assert.equal(result.success, false)
+    assert.equal(result.success, true)
   })
 
   it("accepts valid uuids", () => {
     const result = assignIntroSchema.safeParse({
       introId: "550e8400-e29b-41d4-a716-446655440000",
-      campaignIds: ["6ba7b810-9dad-11d1-80b4-00c04fd430c8"],
+      selectedIds: ["6ba7b810-9dad-11d1-80b4-00c04fd430c8"],
     })
     assert.equal(result.success, true)
+  })
+})
+
+describe("reconcileIntroCampaignSelection", () => {
+  const presented = ["a", "b", "c"]
+
+  it("intersects selected ids with the presented set", () => {
+    const result = reconcileIntroCampaignSelection(presented, ["a", "x", "c"])
+    assert.deepEqual(result.selected, ["a", "c"])
+    assert.deepEqual(result.deselected, ["b"])
+  })
+
+  it("treats an empty selection as clear-all within presented", () => {
+    const result = reconcileIntroCampaignSelection(presented, [])
+    assert.deepEqual(result.selected, [])
+    assert.deepEqual(result.deselected, presented)
   })
 })

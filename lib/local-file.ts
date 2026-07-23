@@ -1,7 +1,73 @@
 import "server-only"
 
 import { createReadStream } from "node:fs"
-import { stat } from "node:fs/promises"
+import { readdir, stat, unlink } from "node:fs/promises"
+import path from "node:path"
+
+/** Delete a file if it exists; ignore ENOENT. */
+export async function removeIfExists(filePath: string): Promise<void> {
+  try {
+    await unlink(filePath)
+  } catch (error) {
+    if (
+      error instanceof Error &&
+      "code" in error &&
+      (error as NodeJS.ErrnoException).code === "ENOENT"
+    ) {
+      return
+    }
+    throw error
+  }
+}
+
+const UPLOAD_TEMP_SUFFIX = "-upload"
+
+/** Remove orphaned intro upload temps left by a crash mid-normalize. */
+export async function sweepStaleIntroUploadTemps(
+  tmpDirAbs: string,
+  maxAgeMs = 60 * 60 * 1000,
+): Promise<void> {
+  let entries: string[]
+  try {
+    entries = await readdir(tmpDirAbs)
+  } catch (error) {
+    if (
+      error instanceof Error &&
+      "code" in error &&
+      (error as NodeJS.ErrnoException).code === "ENOENT"
+    ) {
+      return
+    }
+    throw error
+  }
+
+  const cutoff = Date.now() - maxAgeMs
+  await Promise.all(
+    entries
+      .filter((name) => name.endsWith(UPLOAD_TEMP_SUFFIX))
+      .map(async (name) => {
+        const filePath = path.join(tmpDirAbs, name)
+        let fileStat
+        try {
+          fileStat = await stat(filePath)
+        } catch (error) {
+          // Another worker's sweep (or an upload's cleanup) removed it between
+          // readdir and stat — nothing to do, and this must not fail boot.
+          if (
+            error instanceof Error &&
+            "code" in error &&
+            (error as NodeJS.ErrnoException).code === "ENOENT"
+          ) {
+            return
+          }
+          throw error
+        }
+        if (fileStat.mtimeMs < cutoff) {
+          await removeIfExists(filePath)
+        }
+      }),
+  )
+}
 
 /** Stream a local file with optional HTTP Range support (D13). */
 export async function serveLocalFile(

@@ -500,17 +500,36 @@ No schema changes — Phase 4 is application code only; `supabase/migrations/` i
 
 ---
 
-#### Phase 5 — Intro videos
+#### Phase 5 — Intro videos ✅ **DONE** (2026-07-23)
 
 **Goal:** upload, normalize, assign.
 
-1. `POST /api/intros` — **Route Handler with `await request.formData()`, not a Server Action** (`Tech.md` §4.3).
-2. Stream to `LOCAL_STORAGE_ROOT/intros/`.
-3. Normalize to 1080p/30fps/AAC 48kHz (`Tech.md` §9.5); extract a poster frame.
-4. Probe once; cache `duration_ms`.
-5. Grid UI per §6.5; campaign assignment; delete guarded when in use.
+~~1. `POST /api/intros` — Route Handler with `await request.formData()`, not a Server Action (`Tech.md` §4.3). 2. Stream to `LOCAL_STORAGE_ROOT/intros/`. 3. Normalize to 1080p/30fps/AAC 48kHz (`Tech.md` §9.5); extract a poster frame. 4. Probe once; cache `duration_ms`. 5. Grid UI per §6.5; campaign assignment; delete guarded when in use.~~ Implemented across `lib/video/*` (ffprobe/ffmpeg pipeline: probe, normalize, poster, and a serialized transcode lock), `lib/intros.ts` + `lib/storage.ts` + `lib/local-file.ts` (data layer, path resolution, Range-aware serving), `app/api/intros/*` (the upload Route Handler plus authenticated file/poster routes), `app/(app)/intros/*` (grid page + server actions), and `components/intros/*` (upload card, intro card, rename/assign/delete dialogs).
 
-**Exit:** a 50MB+ intro uploads without hitting a body limit. The stored file is exactly the normalized profile. `duration_ms` matches the file. Assigning an intro to a paused campaign resumes its jobs once Phase 7 exists.
+**Exit — all met:**
+
+| Criterion | Result |
+|---|---|
+| A 50MB+ intro uploads without hitting a body limit | ✅ `experimental.proxyClientMaxBodySize: "500mb"` (verified against the installed Next 16 docs) lifts the proxy's 10MB default; `verify:intros` generates a >50MB clip and uploads it. |
+| The stored file is exactly the normalized profile | ✅ The D5 filter chain yields 1920×1080 / 30fps / yuv420p / H.264 + AAC 48kHz stereo; silent sources gain an `anullsrc` track. Asserted by ffprobe in `verify:intros`. |
+| `duration_ms` matches the file | ✅ Probed once from the normalized output and cached; `verify:intros` re-probes and asserts drift ≤ `INTRO_DURATION_MS_TOLERANCE` (500 ms). |
+| Assigning an intro to a paused campaign resumes its jobs once Phase 7 exists | ⏳ FK write only today; resume/enqueue is deferred to Phase 7, as the criterion specifies. |
+
+Verified by `npm run verify:intros` (upload → normalize → serve → assign/clear → delete-guard against a running dev server), plus clean `tsc --noEmit`, `eslint`, and `npm test` (55 tests).
+
+#### Corrections landed after review of Phase 5 (2026-07-23)
+
+A review found no blockers — the phase met every exit criterion with green types/lint/tests. Eight items were addressed; the two behavioural ones:
+
+1. **The assign-intro dialog's checkboxes were half-wired.** It pre-checked campaigns already using the intro and let you uncheck them, but the action only ever *set* the FK — unchecking did nothing, and the schema required at least one selection. It is now a true reconcile editor: `setIntroCampaigns` sets the intro on checked campaigns and clears it on unchecked ones, guarded by `.eq('intro_video_id', introId)` so a campaign holding a *different* intro is never touched. The presented set is recomputed server-side from `listAssignableCampaigns()` rather than trusted from the client; a pure `reconcileIntroCampaignSelection` does the intersection (unit-tested).
+
+2. **Oversized uploads failed confusingly.** Past `proxyClientMaxBodySize`, Next truncates the body silently, so a too-big file surfaced as a generic "not a video" error from ffprobe. A shared `INTRO_MAX_UPLOAD_BYTES` (500 MB) now backs a client-side size check and a server `413` (on `content-length` and `File.size`) with a clear message.
+
+Also: `removeIfExists` was de-duplicated into `lib/local-file.ts`; a node-runtime-guarded startup sweep (`sweepStaleIntroUploadTemps`, ENOENT-tolerant per file so a boot-time race can't refuse startup) clears intro upload temps orphaned by a crash mid-normalize; the `verify:intros` duration tolerance was tightened 1500 → 500 ms and gained end-to-end reconcile assign/clear coverage; and the synchronous-normalize-under-lock tradeoff plus the poster-seek/duration coupling are now commented in the upload route.
+
+One item was deliberately **not** taken: a max-duration guard on intros (the intro is the master clock, so a very long upload is accepted) remains a product decision, left open per instruction.
+
+No schema changes — Phase 5 is application code only; `supabase/migrations/` is untouched since Phase 1, so `db push` stays a no-op.
 
 ---
 

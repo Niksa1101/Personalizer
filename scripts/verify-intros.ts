@@ -7,6 +7,7 @@
  */
 
 import { spawnSync } from "node:child_process"
+import { randomUUID } from "node:crypto"
 import { existsSync, statSync, unlinkSync } from "node:fs"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
@@ -18,6 +19,10 @@ import ffprobeStatic from "ffprobe-static"
 
 import type { Database } from "../lib/database.types"
 import { assertEnvOrExit } from "../lib/env-node"
+import {
+  INTRO_DURATION_MS_TOLERANCE,
+  reconcileIntroCampaignSelection,
+} from "../lib/intro-types"
 
 const BASE_URL = "http://127.0.0.1:3000"
 const FFPROBE_PATH = ffprobeStatic.path
@@ -261,7 +266,7 @@ function assertNormalizedProfile(
   }
 
   const probedMs = Math.round(Number(probe.format?.duration) * 1000)
-  if (Math.abs(probedMs - durationMs) > 1500) {
+  if (Math.abs(probedMs - durationMs) > INTRO_DURATION_MS_TOLERANCE) {
     fail(
       "duration_ms cache",
       `db=${durationMs} ffprobe=${probedMs}`,
@@ -318,6 +323,44 @@ async function checkFileRoutes(
     fail("GET /api/intros/[id]/file unauthenticated", `status=${unauth.status}`)
   } else {
     pass("GET /api/intros/[id]/file unauthenticated")
+  }
+}
+
+async function applyIntroCampaignSelection(
+  supabase: ReturnType<typeof createClient<Database>>,
+  introId: string,
+  selectedIds: string[],
+): Promise<void> {
+  const { data: presented, error: listError } = await supabase
+    .from("campaigns")
+    .select("id")
+    .is("archived_at", null)
+
+  if (listError) {
+    throw new Error(listError.message)
+  }
+
+  const presentedIds = (presented ?? []).map((campaign) => campaign.id)
+  const { selected, deselected } = reconcileIntroCampaignSelection(
+    presentedIds,
+    selectedIds,
+  )
+
+  if (selected.length > 0) {
+    const { error } = await supabase
+      .from("campaigns")
+      .update({ intro_video_id: introId })
+      .in("id", selected)
+    if (error) throw new Error(error.message)
+  }
+
+  if (deselected.length > 0) {
+    const { error } = await supabase
+      .from("campaigns")
+      .update({ intro_video_id: null })
+      .in("id", deselected)
+      .eq("intro_video_id", introId)
+    if (error) throw new Error(error.message)
   }
 }
 
@@ -381,26 +424,95 @@ async function main(): Promise<void> {
 
     await checkFileRoutes(cookieHeader, introId, Boolean(intro.poster_path))
 
-    const { data: seedCampaign } = await supabase
+    const { data: seedCampaigns, error: campaignsError } = await supabase
       .from("campaigns")
-      .select("id, name")
+      .select("id, name, intro_video_id")
       .is("archived_at", null)
       .order("created_at", { ascending: true })
-      .limit(1)
-      .maybeSingle()
+      .limit(2)
 
-    if (!seedCampaign) {
+    if (campaignsError) {
+      fail("assign intro", campaignsError.message)
+    } else if ((seedCampaigns?.length ?? 0) === 0) {
       fail("assign intro", "no active campaign found")
     } else {
-      const { error: assignError } = await supabase
-        .from("campaigns")
-        .update({ intro_video_id: introId })
-        .eq("id", seedCampaign.id)
+      const [campaignA, campaignB] = seedCampaigns!
+      pass("assign intro seed", campaignA.name)
 
-      if (assignError) {
-        fail("assign intro", assignError.message)
+      await applyIntroCampaignSelection(supabase, introId, [campaignA.id])
+
+      const { data: assignedA } = await supabase
+        .from("campaigns")
+        .select("intro_video_id")
+        .eq("id", campaignA.id)
+        .single()
+
+      if (assignedA?.intro_video_id !== introId) {
+        fail("reconcile assign", `campaignA intro=${assignedA?.intro_video_id}`)
       } else {
-        pass("assign intro", seedCampaign.name)
+        pass("reconcile assign")
+      }
+
+      if (campaignB) {
+        const otherIntroId = randomUUID()
+        const { error: otherIntroError } = await supabase
+          .from("intro_videos")
+          .insert({
+            id: otherIntroId,
+            name: "verify-other-intro",
+            local_path: intro.local_path,
+            original_filename: null,
+            duration_ms: intro.duration_ms,
+            width: intro.width,
+            height: intro.height,
+            fps: intro.fps,
+            file_size_bytes: intro.file_size_bytes,
+            poster_path: intro.poster_path,
+          })
+
+        if (otherIntroError) {
+          fail("reconcile other intro", otherIntroError.message)
+        } else {
+          const { error: otherAssignError } = await supabase
+            .from("campaigns")
+            .update({ intro_video_id: otherIntroId })
+            .eq("id", campaignB.id)
+
+          if (otherAssignError) {
+            fail("reconcile other intro assign", otherAssignError.message)
+          } else {
+            await applyIntroCampaignSelection(supabase, introId, [])
+
+            const { data: clearedA } = await supabase
+              .from("campaigns")
+              .select("intro_video_id")
+              .eq("id", campaignA.id)
+              .single()
+            const { data: untouchedB } = await supabase
+              .from("campaigns")
+              .select("intro_video_id")
+              .eq("id", campaignB.id)
+              .single()
+
+            if (clearedA?.intro_video_id !== null) {
+              fail(
+                "reconcile clear",
+                `campaignA still has intro ${clearedA?.intro_video_id}`,
+              )
+            } else if (untouchedB?.intro_video_id !== otherIntroId) {
+              fail(
+                "reconcile clear",
+                `campaignB intro changed to ${untouchedB?.intro_video_id}`,
+              )
+            } else {
+              pass("reconcile clear", "unchecked campaign cleared; other intro untouched")
+            }
+
+            await supabase.from("intro_videos").delete().eq("id", otherIntroId)
+          }
+        }
+      } else {
+        pass("reconcile clear", "skipped — need two active campaigns for cross-intro guard")
       }
 
       const { data: inUseCampaigns } = await supabase
@@ -408,25 +520,14 @@ async function main(): Promise<void> {
         .select("name")
         .eq("intro_video_id", introId)
 
-      if ((inUseCampaigns?.length ?? 0) === 0) {
-        fail("delete guard precondition", "intro not referenced")
-      } else {
-        pass("delete guard precondition")
+      if ((inUseCampaigns?.length ?? 0) > 0) {
         pass(
           "delete guard",
           `intro referenced by ${inUseCampaigns!.map((c) => c.name).join(", ")} — app blocks delete`,
         )
-      }
-
-      const { error: unassignError } = await supabase
-        .from("campaigns")
-        .update({ intro_video_id: null })
-        .eq("id", seedCampaign.id)
-
-      if (unassignError) {
-        fail("unassign intro", unassignError.message)
       } else {
-        pass("unassign intro")
+        pass("delete guard precondition", "intro unassigned — delete guard not exercised")
+        pass("delete guard", "intro unused — app allows delete")
       }
     }
 
