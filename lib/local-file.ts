@@ -1,8 +1,27 @@
 import "server-only"
 
 import { createReadStream } from "node:fs"
-import { readdir, stat, unlink } from "node:fs/promises"
+import { copyFile, mkdir, readdir, rename, stat, unlink } from "node:fs/promises"
 import path from "node:path"
+
+/** Move a file, creating parent dirs; copy+unlink if rename crosses devices. */
+export async function moveFile(fromAbs: string, toAbs: string): Promise<void> {
+  await mkdir(path.dirname(toAbs), { recursive: true })
+  try {
+    await rename(fromAbs, toAbs)
+  } catch (error) {
+    if (
+      error instanceof Error &&
+      "code" in error &&
+      (error as NodeJS.ErrnoException).code === "EXDEV"
+    ) {
+      await copyFile(fromAbs, toAbs)
+      await unlink(fromAbs)
+      return
+    }
+    throw error
+  }
+}
 
 /** Delete a file if it exists; ignore ENOENT. */
 export async function removeIfExists(filePath: string): Promise<void> {

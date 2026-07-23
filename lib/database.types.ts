@@ -164,6 +164,62 @@ export type Database = {
         }
         Relationships: []
       }
+      import_batches: {
+        Row: {
+          id: string
+          campaign_id: string
+          filename: string
+          slug: string
+          row_count: number
+          imported_count: number
+          linked_count: number
+          duplicate_count: number
+          skipped_count: number
+          rejected_rows: Json
+          delimiter: string | null
+          had_bom: boolean
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          campaign_id: string
+          filename: string
+          slug: string
+          row_count?: number
+          imported_count?: number
+          linked_count?: number
+          duplicate_count?: number
+          skipped_count?: number
+          rejected_rows?: Json
+          delimiter?: string | null
+          had_bom?: boolean
+          created_at?: string
+        }
+        Update: {
+          id?: string
+          campaign_id?: string
+          filename?: string
+          slug?: string
+          row_count?: number
+          imported_count?: number
+          linked_count?: number
+          duplicate_count?: number
+          skipped_count?: number
+          rejected_rows?: Json
+          delimiter?: string | null
+          had_bom?: boolean
+          created_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "import_batches_campaign_id_fkey"
+            columns: ["campaign_id"]
+            isOneToOne: false
+            referencedRelation: "campaigns"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       intro_videos: {
         Row: {
           id: string
@@ -305,6 +361,47 @@ export type Database = {
         }
         Relationships: []
       }
+      pipeline_events: {
+        Row: {
+          id: number
+          campaign_lead_id: string
+          kind: Database["public"]["Enums"]["event_kind"]
+          step: Database["public"]["Enums"]["pipeline_step"] | null
+          message: string
+          error_code: Database["public"]["Enums"]["error_code"] | null
+          meta: Json
+          created_at: string
+        }
+        Insert: {
+          id?: never
+          campaign_lead_id: string
+          kind: Database["public"]["Enums"]["event_kind"]
+          step?: Database["public"]["Enums"]["pipeline_step"] | null
+          message: string
+          error_code?: Database["public"]["Enums"]["error_code"] | null
+          meta?: Json
+          created_at?: string
+        }
+        Update: {
+          id?: never
+          campaign_lead_id?: string
+          kind?: Database["public"]["Enums"]["event_kind"]
+          step?: Database["public"]["Enums"]["pipeline_step"] | null
+          message?: string
+          error_code?: Database["public"]["Enums"]["error_code"] | null
+          meta?: Json
+          created_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "pipeline_events_campaign_lead_id_fkey"
+            columns: ["campaign_lead_id"]
+            isOneToOne: false
+            referencedRelation: "campaign_leads"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       settings: {
         Row: {
           key: string
@@ -331,10 +428,55 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
-      [_ in never]: never
+      import_commit: {
+        Args: {
+          p_campaign_id: string
+          p_batch: Json
+          p_rows: Json
+          p_dry_run?: boolean
+        }
+        Returns: Json
+      }
     }
     Enums: {
+      error_code:
+        | "dns_failure"
+        | "connection_refused"
+        | "ssl_error"
+        | "http_4xx"
+        | "http_5xx"
+        | "parked_domain"
+        | "empty_page"
+        | "not_a_website"
+        | "bot_detected"
+        | "captcha"
+        | "geo_blocked"
+        | "login_required"
+        | "nav_timeout"
+        | "browser_crash"
+        | "ffmpeg_failure"
+        | "intro_missing"
+        | "missing_asset"
+        | "storage_upload_failed"
+        | "netlify_failure"
+        | "disk_full"
+        | "unknown"
+      event_kind:
+        | "imported"
+        | "queued"
+        | "step_started"
+        | "step_succeeded"
+        | "step_failed"
+        | "retry_scheduled"
+        | "paused"
+        | "resumed"
+        | "interrupted"
+        | "deployed"
+        | "promoted"
+        | "unpublished"
+        | "note"
       log_level: "debug" | "info" | "warn" | "error"
+      pipeline_step: "recording" | "merge" | "page" | "deploy"
       lead_status:
         | "queued"
         | "processing"
