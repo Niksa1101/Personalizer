@@ -132,30 +132,6 @@ export function detectHeaderMapping(headers: string[]): HeaderMapping {
   return mapping
 }
 
-/** Apply operator mapping; unmapped columns stay in raw only. */
-export function mapHeaders(
-  headers: string[],
-  records: string[][],
-  mapping: HeaderMapping,
-): Array<Record<string, string>> {
-  return records.map((record) => {
-    const raw: Record<string, string> = {}
-    const row: Record<string, string> = {}
-
-    headers.forEach((header, index) => {
-      const value = (record[index] ?? "").trim()
-      raw[header] = value
-      const field = mapping[header]
-      if (field && field !== UNMAPPED && !(field in row)) {
-        row[field] = value
-      }
-    })
-
-    row.raw = JSON.stringify(raw)
-    return row
-  })
-}
-
 export function isValidEmail(value: string): boolean {
   return EMAIL_REGEX.test(value.trim())
 }
@@ -192,10 +168,6 @@ export function normalizeWebsiteUrl(raw: string | null | undefined): string | nu
     return `${url.protocol}//${url.host}`
   }
 
-  if (url.pathname.endsWith("/") && !url.search && !url.hash) {
-    url.pathname = url.pathname.replace(/\/+$/, "") || "/"
-  }
-
   return url.href
 }
 
@@ -212,7 +184,7 @@ export function isSocialOrDirectory(url: string): boolean {
     return false
   }
 
-  const host = parsed.hostname.toLowerCase()
+  const host = parsed.hostname.toLowerCase().replace(/^www\./, "")
   const hostPath = `${host}${parsed.pathname}`.replace(/\/+$/, "")
 
   if (SOCIAL_HOSTS.some((suffix) => hostMatchesSuffix(host, suffix))) {
@@ -301,7 +273,7 @@ export function classify(
     }
 
     rows.push({
-      website_url: skip ? websiteRaw : normalizedUrl,
+      website_url: normalizedUrl,
       email,
       company: mapped.company?.trim() || null,
       first_name: mapped.first_name?.trim() || null,

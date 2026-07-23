@@ -74,6 +74,18 @@ describe("classify", () => {
     assert.equal(rejectedRows.length, 1)
     assert.match(rejectedRows[0]!.reason, /unparseable/)
   })
+
+  it("stores normalized URL on skipped social rows", () => {
+    const { rows } = classify(
+      headers,
+      [["Acme", "https://facebook.com/acme", "info@acme.com"]],
+      [2],
+      mapping,
+    )
+    assert.equal(rows.length, 1)
+    assert.equal(rows[0]!.skip, "not_a_website")
+    assert.equal(rows[0]!.website_url, "https://facebook.com/acme")
+  })
 })
 
 describe("normalizeWebsiteUrl", () => {
@@ -86,6 +98,13 @@ describe("normalizeWebsiteUrl", () => {
 
   it("drops trailing slash on bare-host URLs", () => {
     assert.equal(normalizeWebsiteUrl("example.com/"), "https://example.com")
+  })
+
+  it("preserves trailing slash on path URLs", () => {
+    assert.equal(
+      normalizeWebsiteUrl("acme.com/about/"),
+      "https://acme.com/about/",
+    )
   })
 
   it("returns null for unparseable input", () => {
@@ -103,6 +122,10 @@ describe("isSocialOrDirectory", () => {
     assert.equal(isSocialOrDirectory("https://www.yelp.com/biz/acme"), true)
     assert.equal(
       isSocialOrDirectory("https://google.com/maps/place/acme"),
+      true,
+    )
+    assert.equal(
+      isSocialOrDirectory("https://www.google.com/maps/place/x"),
       true,
     )
   })
