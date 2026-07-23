@@ -94,6 +94,7 @@ export type SettingOverrides<K extends SettingKey = SettingKey> = {
   lead?: SettingValues[K] | null
 }
 
+// Range/integer validation is deferred to the Settings write path — corrupt jsonb falls back silently.
 function parseSettingValue<K extends SettingKey>(
   key: K,
   raw: unknown,
@@ -105,15 +106,12 @@ function parseSettingValue<K extends SettingKey>(
     case "recorder.scroll_ease_ms":
     case "recorder.post_load_delay_ms":
     case "recorder.retention_days":
+    case "merge.pip_scale":
     case "merge.max_stretch_factor":
     case "encode.web_crf":
     case "encode.web_audio_kbps":
     case "queue.concurrency":
     case "queue.auto_retry_limit": {
-      const value = typeof raw === "number" ? raw : Number(raw)
-      return Number.isFinite(value) ? (value as SettingValues[K]) : undefined
-    }
-    case "merge.pip_scale": {
       const value = typeof raw === "number" ? raw : Number(raw)
       return Number.isFinite(value) ? (value as SettingValues[K]) : undefined
     }
@@ -189,12 +187,12 @@ export async function resolveSetting<K extends SettingKey>(
 
 export async function resolveMany<K extends SettingKey>(
   keys: readonly K[],
-  overrides?: SettingOverrides<K>,
+  overrides?: Partial<Record<K, SettingOverrides<K>>>,
 ): Promise<Pick<SettingValues, K>> {
   const global = await loadGlobalSettings()
   const result = {} as Pick<SettingValues, K>
   for (const key of keys) {
-    result[key] = resolveValue(key, global, overrides)
+    result[key] = resolveValue(key, global, overrides?.[key])
   }
   return result
 }
