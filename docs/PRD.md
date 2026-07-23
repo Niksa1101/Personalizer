@@ -467,13 +467,36 @@ No schema changes — `db push` is a no-op.
 
 ---
 
-#### Phase 4 — Campaigns
+#### Phase 4 — Campaigns ✅ **DONE** (2026-07-23)
 
 **Goal:** full campaign CRUD.
 
-List, create (with slug derivation), detail/settings per §6.2, archive, delete with the landing-page prompt (the unpublish call itself lands in Phase 11 — until then, delete records only and say so).
+~~List, create (with slug derivation), detail/settings per §6.2, archive, delete with the landing-page prompt (the unpublish call itself lands in Phase 11 — until then, delete records only and say so).~~ Implemented across `lib/campaigns.ts` (data layer), `app/(app)/campaigns/*` (routes + server actions), and `components/campaigns/*` (list table, create form, and the five settings tabs — General, Intro & Merge, Landing Template, CTA, Recorder).
 
-**Exit:** a campaign can be created, edited, archived, and deleted. Slug uniqueness enforced. Slug locked after first deploy. The template editor previews against a sample lead with all placeholders substituted.
+**Exit — all four met:**
+
+| Criterion | Result |
+|---|---|
+| A campaign can be created, edited, archived, and deleted | ✅ Create (with slug derivation + auto-suffix uniqueness), General/Merge/Template/CTA/Recorder edits, archive/unarchive, and delete (records only — Phase 11 wires real unpublish, and the delete dialog says so). |
+| Slug uniqueness enforced | ✅ `resolveUniqueSlug` appends `-2, -3, …` on create; edits reject a duplicate with a friendly message, backed by the DB unique constraint (`23505` mapped to "Slug is already in use"). |
+| Slug locked after first deploy | ✅ `firstDeployLocked` (any `campaign_lead` with a `netlify_url`) drives a read-only field and a server-side guard that rejects a changed slug. |
+| Template editor previews against a sample lead with all placeholders substituted | ✅ `substituteTemplate` fills every §5.1.1 token against the campaign's most-recent lead (or the synthetic `SAMPLE_LEAD`), rendered in a `sandbox=""` iframe. Covered by `lib/landing-template.test.ts`. |
+
+Verified by `npm run verify:campaigns` (CRUD against a running dev server), plus clean `tsc --noEmit`, `eslint .`, and `npm test`.
+
+#### Corrections landed after review of Phase 4 (2026-07-23)
+
+A review found no blockers — the phase met every exit criterion with green types/lint/tests. Ten items were fixed before Phase 5 opened. The behavioural ones:
+
+1. **The post-toast URL cleanup bounced the user off the page.** `campaign-toast.tsx` replaced the URL with a bare `"."`, which resolves relative to the current path and drops the last segment — so creating a campaign threw you off `/campaigns/{id}` and deleting threw you off `/campaigns`. Now replaces with an explicit `usePathname()`.
+
+2. **New campaigns ignored the operator's global settings.** `createCampaign` seeded the `NOT NULL` recorder/merge columns from the hardcoded `SETTING_DEFAULTS` constants, so the `lead → campaign → global` chain never reached the global tier and the operator's tuned defaults were dropped. Now seeds from `resolveMany` over the live settings.
+
+3. **The template preview substituted lead values without escaping.** Safe today (the preview iframe is fully sandboxed), but the same path feeds the public landing page in Phase 11. Flagged in-code as a Phase 11 requirement to HTML-escape per context before public rendering.
+
+Also: the sample-lead query now orders DB-side by the joined `leads.updated_at` (was ordering the wrong table, then briefly fetched every row to sort in JS); the recorder viewport control shows an explicit "Custom (W×H)" option instead of silently snapping an off-preset size to 1920×1080; `formatDate` pins the `en-US` locale to avoid an SSR hydration mismatch; the delete dialog and archive toggle were extracted into a shared `DeleteCampaignDialog` and `useArchiveToggle` (the table calls the hook from a per-row subcomponent, not in a loop); and dead toast configs plus redundant inner schema re-parsing were removed.
+
+No schema changes — Phase 4 is application code only; `supabase/migrations/` is untouched since Phase 1, so `db push` stays a no-op.
 
 ---
 
