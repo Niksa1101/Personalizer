@@ -272,6 +272,39 @@ export type Database = {
         }
         Relationships: []
       }
+      logs: {
+        Row: {
+          id: number
+          level: Database["public"]["Enums"]["log_level"]
+          scope: string
+          message: string
+          campaign_lead_id: string | null
+          job_run_id: string | null
+          meta: Json
+          created_at: string
+        }
+        Insert: {
+          id?: never
+          level?: Database["public"]["Enums"]["log_level"]
+          scope: string
+          message: string
+          campaign_lead_id?: string | null
+          job_run_id?: string | null
+          meta?: Json
+          created_at?: string
+        }
+        Update: {
+          id?: never
+          level?: Database["public"]["Enums"]["log_level"]
+          scope?: string
+          message?: string
+          campaign_lead_id?: string | null
+          job_run_id?: string | null
+          meta?: Json
+          created_at?: string
+        }
+        Relationships: []
+      }
       settings: {
         Row: {
           key: string
@@ -301,6 +334,7 @@ export type Database = {
       [_ in never]: never
     }
     Enums: {
+      log_level: "debug" | "info" | "warn" | "error"
       lead_status:
         | "queued"
         | "processing"
