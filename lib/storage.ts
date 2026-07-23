@@ -22,3 +22,13 @@ export function introPosterRelPath(id: string): string {
 export function introUploadTempRelPath(id: string): string {
   return `tmp/${id}-upload`
 }
+
+/** Temp CSV pending preview/commit. */
+export function importUploadTempRelPath(token: string): string {
+  return `tmp/import-${token}.csv`
+}
+
+/** Persisted CSV audit copy for a committed batch. */
+export function importBatchCsvRelPath(slug: string): string {
+  return `imports/${slug}.csv`
+}
