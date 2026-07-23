@@ -18,11 +18,7 @@ export function formatLeadStatusCounts(counts: LeadStatusCounts): string {
   return parts.length > 0 ? parts.join(", ") : "No leads"
 }
 
-export function formatDate(iso: string): string {
-  return new Intl.DateTimeFormat("en-US", {
-    dateStyle: "medium",
-  }).format(new Date(iso))
-}
+export { formatDate } from "@/lib/format"
 
 export const MERGE_LAYOUT_LABELS = {
   bubble_br: "Bubble — bottom right",

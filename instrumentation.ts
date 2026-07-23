@@ -25,7 +25,10 @@ export async function register() {
 
   if (process.env.NEXT_RUNTIME === 'nodejs') {
     const { storageAbs } = await import('./lib/storage')
-    const { sweepStaleIntroUploadTemps } = await import('./lib/local-file')
-    await sweepStaleIntroUploadTemps(storageAbs('tmp'))
+    const { sweepStaleIntroUploadTemps, sweepStaleImportUploadTemps } =
+      await import('./lib/local-file')
+    const tmpDir = storageAbs('tmp')
+    await sweepStaleIntroUploadTemps(tmpDir)
+    await sweepStaleImportUploadTemps(tmpDir)
   }
 }
