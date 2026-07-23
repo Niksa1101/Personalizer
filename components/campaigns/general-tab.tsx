@@ -1,26 +1,15 @@
 "use client"
 
-import { useRouter } from "next/navigation"
 import { useActionState, useEffect, useRef, useState } from "react"
 import { toast } from "sonner"
 
 import {
-  archiveCampaignAction,
-  deleteCampaignAction,
-  unarchiveCampaignAction,
   updateCampaignGeneralAction,
   type CampaignActionState,
 } from "@/app/(app)/campaigns/actions"
+import { DeleteCampaignDialog } from "@/components/campaigns/delete-campaign-dialog"
+import { useArchiveToggle } from "@/components/campaigns/use-archive-toggle"
 import { Button } from "@/components/ui/button"
-import {
-  Dialog,
-  DialogClose,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog"
 import {
   Field,
   FieldDescription,
@@ -40,13 +29,12 @@ type GeneralTabProps = {
 const initialState: CampaignActionState = {}
 
 export function GeneralTab({ campaign, slugLocked }: GeneralTabProps) {
-  const router = useRouter()
   const [state, formAction, pending] = useActionState(
     updateCampaignGeneralAction.bind(null, campaign.id),
     initialState,
   )
   const [deleteOpen, setDeleteOpen] = useState(false)
-  const [busy, setBusy] = useState(false)
+  const { busy, toggle } = useArchiveToggle(campaign)
   const wasPending = useRef(false)
 
   useEffect(() => {
@@ -56,35 +44,6 @@ export function GeneralTab({ campaign, slugLocked }: GeneralTabProps) {
     }
     wasPending.current = pending
   }, [pending, state])
-
-  async function handleArchiveToggle() {
-    setBusy(true)
-    try {
-      if (campaign.archived_at) {
-        await unarchiveCampaignAction(campaign.id)
-        toast.success("Campaign unarchived")
-      } else {
-        await archiveCampaignAction(campaign.id)
-        toast.success("Campaign archived")
-      }
-      router.refresh()
-    } catch {
-      toast.error("Could not update campaign")
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  async function handleDelete() {
-    setBusy(true)
-    try {
-      await deleteCampaignAction(campaign.id)
-    } catch {
-      toast.error("Could not delete campaign")
-      setBusy(false)
-      setDeleteOpen(false)
-    }
-  }
 
   return (
     <div className="mx-auto max-w-lg space-y-8">
@@ -147,12 +106,7 @@ export function GeneralTab({ campaign, slugLocked }: GeneralTabProps) {
       <div className="space-y-4 border-t border-border pt-6">
         <h3 className="text-sm font-medium">Campaign actions</h3>
         <div className="flex flex-wrap gap-3">
-          <Button
-            type="button"
-            variant="outline"
-            disabled={busy}
-            onClick={handleArchiveToggle}
-          >
+          <Button type="button" variant="outline" disabled={busy} onClick={toggle}>
             {campaign.archived_at ? "Unarchive" : "Archive"}
           </Button>
           <Button
@@ -166,26 +120,11 @@ export function GeneralTab({ campaign, slugLocked }: GeneralTabProps) {
         </div>
       </div>
 
-      <Dialog open={deleteOpen} onOpenChange={setDeleteOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Delete {campaign.name}?</DialogTitle>
-            <DialogDescription>
-              Also remove the published landing page(s)? This deletes database
-              records only — published pages stay live until Phase 11 wires real
-              unpublish.
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <DialogClose render={<Button variant="outline" disabled={busy} />}>
-              Cancel
-            </DialogClose>
-            <Button variant="destructive" disabled={busy} onClick={handleDelete}>
-              Delete campaign
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <DeleteCampaignDialog
+        campaign={campaign}
+        open={deleteOpen}
+        onOpenChange={setDeleteOpen}
+      />
     </div>
   )
 }

@@ -1,7 +1,6 @@
 import "server-only"
 
 import {
-  createCampaignSchema,
   EMPTY_STATUS_COUNTS,
   type CampaignListItem,
   type CampaignRow,
@@ -14,11 +13,6 @@ import {
   type UpdateCampaignMergeInput,
   type UpdateCampaignRecorderInput,
   type UpdateCampaignTemplateInput,
-  updateCampaignCtaSchema,
-  updateCampaignGeneralSchema,
-  updateCampaignMergeSchema,
-  updateCampaignRecorderSchema,
-  updateCampaignTemplateSchema,
 } from "@/lib/campaign-types"
 import {
   DEFAULT_LANDING_TEMPLATE,
@@ -26,7 +20,7 @@ import {
   type SampleLead,
 } from "@/lib/landing-template"
 import { slugFromName, SLUG_REGEX } from "@/lib/slug"
-import { SETTING_DEFAULTS } from "@/lib/settings"
+import { resolveMany } from "@/lib/settings"
 import { getSupabaseAdmin } from "@/lib/supabase"
 
 export type { SampleLead } from "@/lib/landing-template"
@@ -172,21 +166,28 @@ export async function getCampaign(id: string): Promise<CampaignRow | null> {
 export async function createCampaign(
   input: CreateCampaignInput,
 ): Promise<CampaignRow> {
-  const parsed = createCampaignSchema.parse(input)
-  const slug = await resolveUniqueSlug(parsed.slug)
+  const slug = await resolveUniqueSlug(input.slug)
+
+  const defaults = await resolveMany([
+    "merge.layout",
+    "merge.pip_scale",
+    "recorder.viewport_width",
+    "recorder.viewport_height",
+    "recorder.nav_timeout_ms",
+  ])
 
   const { data, error } = await getSupabaseAdmin()
     .from("campaigns")
     .insert({
-      name: parsed.name,
+      name: input.name,
       slug,
-      description: parsed.description ?? null,
+      description: input.description ?? null,
       landing_template: DEFAULT_LANDING_TEMPLATE,
-      merge_layout: SETTING_DEFAULTS["merge.layout"],
-      pip_scale: SETTING_DEFAULTS["merge.pip_scale"],
-      viewport_width: SETTING_DEFAULTS["recorder.viewport_width"],
-      viewport_height: SETTING_DEFAULTS["recorder.viewport_height"],
-      nav_timeout_ms: SETTING_DEFAULTS["recorder.nav_timeout_ms"],
+      merge_layout: defaults["merge.layout"],
+      pip_scale: defaults["merge.pip_scale"],
+      viewport_width: defaults["recorder.viewport_width"],
+      viewport_height: defaults["recorder.viewport_height"],
+      nav_timeout_ms: defaults["recorder.nav_timeout_ms"],
     })
     .select("*")
     .single()
@@ -199,29 +200,33 @@ export async function updateCampaignGeneral(
   id: string,
   input: UpdateCampaignGeneralInput,
 ): Promise<CampaignRow> {
-  const parsed = updateCampaignGeneralSchema.parse(input)
   const locked = await firstDeployLocked(id)
 
-  if (locked && parsed.slug !== (await getCampaign(id))?.slug) {
+  if (locked && input.slug !== (await getCampaign(id))?.slug) {
     throw new Error("Slug cannot be changed after the first deploy")
   }
 
-  if (!locked && (await slugExists(parsed.slug, id))) {
+  if (!locked && (await slugExists(input.slug, id))) {
     throw new Error("Slug is already in use")
   }
 
   const { data, error } = await getSupabaseAdmin()
     .from("campaigns")
     .update({
-      name: parsed.name,
-      slug: parsed.slug,
-      description: parsed.description ?? null,
+      name: input.name,
+      slug: input.slug,
+      description: input.description ?? null,
     })
     .eq("id", id)
     .select("*")
     .single()
 
-  if (error) throw new Error(`Failed to update campaign: ${error.message}`)
+  if (error) {
+    if (error.code === "23505") {
+      throw new Error("Slug is already in use")
+    }
+    throw new Error(`Failed to update campaign: ${error.message}`)
+  }
   return data
 }
 
@@ -229,14 +234,12 @@ export async function updateCampaignMerge(
   id: string,
   input: UpdateCampaignMergeInput,
 ): Promise<CampaignRow> {
-  const parsed = updateCampaignMergeSchema.parse(input)
-
   const { data, error } = await getSupabaseAdmin()
     .from("campaigns")
     .update({
-      merge_layout: parsed.merge_layout,
-      pip_scale: parsed.pip_scale,
-      intro_video_id: parsed.intro_video_id,
+      merge_layout: input.merge_layout,
+      pip_scale: input.pip_scale,
+      intro_video_id: input.intro_video_id,
     })
     .eq("id", id)
     .select("*")
@@ -250,11 +253,9 @@ export async function updateCampaignTemplate(
   id: string,
   input: UpdateCampaignTemplateInput,
 ): Promise<CampaignRow> {
-  const parsed = updateCampaignTemplateSchema.parse(input)
-
   const { data, error } = await getSupabaseAdmin()
     .from("campaigns")
-    .update({ landing_template: parsed.landing_template })
+    .update({ landing_template: input.landing_template })
     .eq("id", id)
     .select("*")
     .single()
@@ -267,14 +268,12 @@ export async function updateCampaignCta(
   id: string,
   input: UpdateCampaignCtaInput,
 ): Promise<CampaignRow> {
-  const parsed = updateCampaignCtaSchema.parse(input)
-
   const { data, error } = await getSupabaseAdmin()
     .from("campaigns")
     .update({
-      cta_type: parsed.cta_type,
-      cta_label: parsed.cta_label,
-      cta_url: parsed.cta_url,
+      cta_type: input.cta_type,
+      cta_label: input.cta_label,
+      cta_url: input.cta_url,
     })
     .eq("id", id)
     .select("*")
@@ -288,14 +287,12 @@ export async function updateCampaignRecorder(
   id: string,
   input: UpdateCampaignRecorderInput,
 ): Promise<CampaignRow> {
-  const parsed = updateCampaignRecorderSchema.parse(input)
-
   const { data, error } = await getSupabaseAdmin()
     .from("campaigns")
     .update({
-      viewport_width: parsed.viewport_width,
-      viewport_height: parsed.viewport_height,
-      nav_timeout_ms: parsed.nav_timeout_ms,
+      viewport_width: input.viewport_width,
+      viewport_height: input.viewport_height,
+      nav_timeout_ms: input.nav_timeout_ms,
     })
     .eq("id", id)
     .select("*")
@@ -390,7 +387,7 @@ export async function getSampleLeadForCampaign(
     `,
     )
     .eq("campaign_id", campaignId)
-    .order("updated_at", { ascending: false })
+    .order("updated_at", { referencedTable: "leads", ascending: false })
     .limit(1)
     .maybeSingle()
 

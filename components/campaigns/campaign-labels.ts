@@ -19,7 +19,7 @@ export function formatLeadStatusCounts(counts: LeadStatusCounts): string {
 }
 
 export function formatDate(iso: string): string {
-  return new Intl.DateTimeFormat(undefined, {
+  return new Intl.DateTimeFormat("en-US", {
     dateStyle: "medium",
   }).format(new Date(iso))
 }

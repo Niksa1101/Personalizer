@@ -186,7 +186,8 @@ export function sampleValuesFor(
   return leadToTemplateValues(lead, extras)
 }
 
-/** Replace {{token}} placeholders. Unknown or missing tokens render empty. */
+/** Replace {{token}} placeholders. Unknown or missing tokens render empty.
+ *  Output is unescaped — Phase 11 must HTML-escape lead values before public rendering. */
 export function substituteTemplate(
   html: string,
   values: TemplateValues,
