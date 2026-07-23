@@ -19,7 +19,7 @@
 >
 > ⚠️ **Most shadcn/ui knowledge assumes Radix (`@radix-ui/react-*`). This project does not use it.** Do not install it, import from it, or copy Radix-based component source from memory — import paths and several component APIs differ. Read `components/ui/` or the installed `@base-ui/react` package for the real API.
 >
-> Adding a component is always `npx shadcn@latest add <component>` — never a manual copy-paste into `components/ui/`.
+> Adding a component is always `npx shadcn@latest add <component>` — never a manual copy-paste into `components/ui/`. This applies to **all** UI primitives, not only the ones the preset ships.
 >
 > The same rule is recorded in `AGENTS.md`, which loads into every agent session. If the two ever disagree, `AGENTS.md` wins and this block should be corrected to match.
 
@@ -427,13 +427,21 @@ Also: the login form's lockout countdown was deleted. It was driven by a client-
 
 ---
 
-#### Phase 3 — App shell
+#### Phase 3 — App shell ✅ **DONE** (2026-07-23)
 
 **Goal:** navigable skeleton with all eight screens present.
 
-Authenticated layout, sidebar navigation, shadcn theme wired, empty-state placeholders for all eight screens, `lib/supabase.ts` (service-role client, `server-only`), `lib/settings.ts` (lead → campaign → global resolver).
+~~Authenticated layout, sidebar navigation, shadcn theme wired, empty-state placeholders for all eight screens, `lib/supabase.ts` (service-role client, `server-only`), `lib/settings.ts` (lead → campaign → global resolver).~~
 
-**Exit:** every screen in §6 is reachable and renders an empty state. No screen throws. The Supabase client is unreachable from any client component (a client import fails the build).
+**Exit — all three met:**
+
+| Criterion | Result |
+|---|---|
+| Every screen in §6 reachable and renders an empty state | ✅ Sidebar navigation (Work / Setup / System) links to all eight routes plus `/campaigns/[id]` placeholder. Each screen renders a screen-specific `<EmptyState>`. |
+| No screen throws | ✅ All routes return 200 with a valid session; `/campaigns/<any-id>` renders without querying. `(app)/error.tsx` and `(app)/not-found.tsx` in place. |
+| Supabase client unreachable from client components | ✅ `lib/supabase.ts` leads with `import 'server-only'`. `npm run verify:server-only` writes a temp `"use client"` importer, asserts the build fails citing `server-only`, and cleans up. |
+
+**Also landed:** `lib/settings.ts` (14-key typed resolver with `react.cache`), `lib/nav.ts`, theme toggle (light/dark/system), `npm run verify:shell`.
 
 ---
 
