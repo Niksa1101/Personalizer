@@ -533,13 +533,22 @@ No schema changes — Phase 5 is application code only; `supabase/migrations/` i
 
 ---
 
-#### Phase 6 — CSV import
+#### Phase 6 — CSV import ✅ **DONE** (2026-07-23)
 
 **Goal:** CSV in, `campaign_leads` rows out.
 
-Parse (BOM, delimiter detection, header mapping, ragged-row rejection with 1-based line numbers), URL normalization (`Tech.md` §5.2), social-only detection → `Skipped`, global dedupe on domain-or-email with the three outcomes (§5.3), batch record with all five counts, preview-before-commit UI, persisted post-import report.
+~~Parse (BOM, delimiter detection, header mapping, ragged-row rejection with 1-based line numbers), URL normalization (`Tech.md` §5.2), social-only detection → `Skipped`, global dedupe on domain-or-email with the three outcomes (§5.3), batch record with all five counts, preview-before-commit UI, persisted post-import report.~~
 
-**Exit:** importing a 100-row CSV produces correct counts that reconcile to the row count. Re-importing the same file into the same campaign yields 100 duplicates and zero new rows. Importing into a *different* campaign yields 100 links and zero new leads. A ragged row is rejected with the line number a text editor shows.
+**Exit — all four met:**
+
+| Criterion | Result |
+|---|---|
+| A 100-row CSV produces correct counts that reconcile to the row count | ✅ `verify:import` imports a generated 100-row file; the five counts (new / linked / duplicate / skipped / rejected) sum to the parsed row count. |
+| Re-importing the same file into the same campaign yields 100 duplicates, 0 new | ✅ Global dedupe on domain-or-email; the second commit into the same campaign links nothing new and records 100 duplicates. |
+| Importing into a *different* campaign yields 100 links, 0 new leads | ✅ Existing leads are recognized by domain/email and linked into the new campaign; no `leads` rows are created. |
+| A ragged row is rejected with the line number a text editor shows | ✅ Ragged-row rejection reports 1-based line numbers matching a text editor (`Tech.md` §5.1). |
+
+Verified by `npm run verify:import` (against a running dev server), plus clean `tsc --noEmit`, `eslint`, and `npm test`.
 
 #### Corrections landed after review of Phase 6 (2026-07-23)
 
@@ -561,11 +570,13 @@ Also: three server-rendered dates moved off raw `toLocaleString()` onto a shared
 
 ---
 
-#### Phase 7 — Worker and queue
+#### Phase 7 — Worker and queue ✅ **DONE** (2026-07-24)
 
 **Goal:** the state machine runs, with stub steps only — no real recording, merge, page generation, or deploy.
 
-BullMQ worker with Redis liveness, two-scan boot recovery, retry/backoff, pause/resume, auto-enqueue on import, and `POST /api/leads/[id]/retry`.
+~~BullMQ worker with Redis liveness, two-scan boot recovery, retry/backoff, pause/resume, auto-enqueue on import, and `POST /api/leads/[id]/retry`.~~
+
+**Exit — all five met:**
 
 | # | Criterion | Verified by |
 |---|---|---|
