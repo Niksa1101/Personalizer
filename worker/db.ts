@@ -16,11 +16,18 @@ export type LeadContext = {
     id: string
     slug: string
     intro_video_id: string | null
+    viewport_width: number
+    viewport_height: number
+    nav_timeout_ms: number
   }
   lead: {
     id: string
     domain: string | null
     website_url: string | null
+    source_batch_id: string | null
+    company: string | null
+    full_name: string | null
+    city: string | null
   }
   hasUsableRecording: boolean
 }
@@ -33,6 +40,14 @@ export type LeadBase = {
   campaignLead: CampaignLeadRow
   campaign: LeadContext["campaign"]
   lead: LeadContext["lead"]
+}
+
+export type RecorderContext = LeadContext
+
+export type UsableRecording = {
+  id: string
+  local_path: string | null
+  purged_at: string | null
 }
 
 export type ClaimResult = "claimed" | "skipped" | "gone"
@@ -57,12 +72,14 @@ export async function loadLeadBase(
     await Promise.all([
       getSupabaseAdmin()
         .from("campaigns")
-        .select("id, slug, intro_video_id")
+        .select("id, slug, intro_video_id, viewport_width, viewport_height, nav_timeout_ms")
         .eq("id", campaignLead.campaign_id)
         .maybeSingle(),
       getSupabaseAdmin()
         .from("leads")
-        .select("id, domain, website_url")
+        .select(
+          "id, domain, website_url, source_batch_id, company, full_name, city",
+        )
         .eq("id", campaignLead.lead_id)
         .maybeSingle(),
     ])
@@ -78,6 +95,200 @@ export async function loadLeadBase(
   }
 
   return { campaignLead, campaign, lead }
+}
+
+export async function loadRecorderContext(
+  campaignLeadId: string,
+): Promise<RecorderContext | null> {
+  const base = await loadLeadBase(campaignLeadId)
+  if (!base) return null
+
+  const hasUsableRecording = await checkUsableRecording(base.lead.id)
+  return { ...base, hasUsableRecording }
+}
+
+export async function getUsableRecording(
+  leadId: string,
+): Promise<UsableRecording | null> {
+  const { data, error } = await getSupabaseAdmin()
+    .from("recordings")
+    .select("id, local_path, purged_at")
+    .eq("lead_id", leadId)
+    .is("error_code", null)
+    .is("purged_at", null)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle()
+
+  if (error) {
+    throw new Error(`Failed to load usable recording: ${error.message}`)
+  }
+
+  return data
+}
+
+export async function insertRecording(input: {
+  leadId: string
+  localPath: string
+  durationMs: number
+  width: number
+  height: number
+  pageHeightPx: number
+  fileSizeBytes: number
+  screenshotBeforePath: string | null
+  screenshotAfterPath: string | null
+}): Promise<string> {
+  const { data, error } = await getSupabaseAdmin()
+    .from("recordings")
+    .insert({
+      lead_id: input.leadId,
+      local_path: input.localPath,
+      duration_ms: input.durationMs,
+      width: input.width,
+      height: input.height,
+      page_height_px: input.pageHeightPx,
+      file_size_bytes: input.fileSizeBytes,
+      screenshot_before_path: input.screenshotBeforePath,
+      screenshot_after_path: input.screenshotAfterPath,
+      recorded_at: new Date().toISOString(),
+    })
+    .select("id")
+    .single()
+
+  if (error) {
+    throw new Error(`Failed to insert recording: ${error.message}`)
+  }
+
+  return data.id
+}
+
+/**
+ * Refresh an existing recording row in place with a fresh capture. Used for
+ * forced re-records: updating the single active row (rather than purge + insert)
+ * avoids both the two-active `recordings_lead_active_uk` conflict and the window
+ * where a failed insert would leave the lead with no usable recording.
+ */
+export async function updateRecordingCapture(
+  recordingId: string,
+  input: {
+    localPath: string
+    durationMs: number
+    width: number
+    height: number
+    pageHeightPx: number
+    fileSizeBytes: number
+    screenshotBeforePath: string | null
+    screenshotAfterPath: string | null
+  },
+): Promise<void> {
+  const { error } = await getSupabaseAdmin()
+    .from("recordings")
+    .update({
+      local_path: input.localPath,
+      duration_ms: input.durationMs,
+      width: input.width,
+      height: input.height,
+      page_height_px: input.pageHeightPx,
+      file_size_bytes: input.fileSizeBytes,
+      screenshot_before_path: input.screenshotBeforePath,
+      screenshot_after_path: input.screenshotAfterPath,
+      recorded_at: new Date().toISOString(),
+      purged_at: null,
+      error_code: null,
+    })
+    .eq("id", recordingId)
+
+  if (error) {
+    throw new Error(`Failed to update recording: ${error.message}`)
+  }
+}
+
+export async function insertFailedRecording(input: {
+  leadId: string
+  errorCode: ErrorCode
+  screenshotBeforePath: string | null
+  screenshotAfterPath: string | null
+}): Promise<string> {
+  const { data, error } = await getSupabaseAdmin()
+    .from("recordings")
+    .insert({
+      lead_id: input.leadId,
+      local_path: null,
+      error_code: input.errorCode,
+      screenshot_before_path: input.screenshotBeforePath,
+      screenshot_after_path: input.screenshotAfterPath,
+    })
+    .select("id")
+    .single()
+
+  if (error) {
+    throw new Error(`Failed to insert failed recording: ${error.message}`)
+  }
+
+  return data.id
+}
+
+export async function purgeRecording(recordingId: string): Promise<string | null> {
+  const { data: existing, error: readError } = await getSupabaseAdmin()
+    .from("recordings")
+    .select("local_path")
+    .eq("id", recordingId)
+    .maybeSingle()
+
+  if (readError) {
+    throw new Error(`Failed to read recording for purge: ${readError.message}`)
+  }
+  if (!existing) return null
+
+  const now = new Date().toISOString()
+  const { error } = await getSupabaseAdmin()
+    .from("recordings")
+    .update({
+      purged_at: now,
+      local_path: null,
+    })
+    .eq("id", recordingId)
+
+  if (error) {
+    throw new Error(`Failed to purge recording: ${error.message}`)
+  }
+
+  return existing.local_path
+}
+
+export async function linkRecordingToCampaignLead(
+  campaignLeadId: string,
+  recordingId: string,
+): Promise<void> {
+  const { error } = await getSupabaseAdmin()
+    .from("campaign_leads")
+    .update({ recording_id: recordingId })
+    .eq("id", campaignLeadId)
+
+  if (error) {
+    throw new Error(`Failed to link recording: ${error.message}`)
+  }
+}
+
+export async function writeRecorderLog(input: {
+  level: Database["public"]["Enums"]["log_level"]
+  message: string
+  campaignLeadId?: string | null
+  jobRunId?: string | null
+  meta?: Record<string, unknown>
+}): Promise<void> {
+  const { error } = await getSupabaseAdmin().from("logs").insert({
+    level: input.level,
+    scope: "recorder",
+    message: input.message,
+    campaign_lead_id: input.campaignLeadId ?? null,
+    job_run_id: input.jobRunId ?? null,
+    meta: (input.meta ?? {}) as Database["public"]["Tables"]["logs"]["Insert"]["meta"],
+  })
+
+  if (error) {
+    console.error("[recorder] failed to write log:", error.message)
+  }
 }
 
 export async function reloadCampaignLead(

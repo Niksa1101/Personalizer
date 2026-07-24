@@ -8,3 +8,19 @@ export function slugFromName(name: string): string {
     .replace(/-+/g, "-")
     .replace(/^-|-$/g, "")
 }
+
+export type LeadSlugInput = {
+  id: string
+  company: string | null
+  full_name: string | null
+  city: string | null
+}
+
+/** Collision-safe storage slug: name fragment + stable lead-id suffix. */
+export function leadSlug(lead: LeadSlugInput): string {
+  const base = slugFromName(
+    [lead.company ?? lead.full_name, lead.city].filter(Boolean).join(" "),
+  )
+  const suffix = lead.id.replace(/-/g, "").slice(0, 8)
+  return base ? `${base}-${suffix}` : suffix
+}

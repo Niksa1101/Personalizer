@@ -10,6 +10,7 @@ import { hostname } from "node:os"
 import { Worker } from "bullmq"
 
 import { assertEnvOrExit } from "../lib/env-node"
+import { sweepStaleRecorderTemps } from "../lib/local-file"
 import {
   closeQueueConnections,
   deleteLiveness,
@@ -21,9 +22,11 @@ import {
 } from "../lib/queue"
 import type { StepOutcome } from "../lib/pipeline-types"
 import { resolveMany } from "../lib/settings"
+import { storageAbs } from "../lib/storage"
 
 import { processLeadJob } from "./pipeline"
 import { runBootRecovery, startPeriodicReconcile } from "./recovery"
+import { closeSharedBrowser } from "./recorder/browser"
 
 const SHUTDOWN_DRAIN_MS = 30_000
 
@@ -37,6 +40,7 @@ async function main(): Promise<void> {
   const stopLivenessRefresh = startLivenessRefresh(workerId)
 
   await runBootRecovery()
+  await sweepStaleRecorderTemps(storageAbs("tmp"))
 
   const settings = await resolveMany(["queue.concurrency"])
   const concurrency = settings["queue.concurrency"]
@@ -106,6 +110,9 @@ async function main(): Promise<void> {
 
     stopPeriodicReconcile()
     stopLivenessRefresh()
+    await closeSharedBrowser().catch((error) => {
+      console.error("[worker] browser close error:", error)
+    })
     await deleteLiveness(workerId)
     await closeQueueConnections()
 

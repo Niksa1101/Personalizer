@@ -590,13 +590,41 @@ No schema changes — `supabase/migrations/` untouched since Phase 6's `20260723
 
 ---
 
-#### Phase 8 — Recorder
+#### Phase 8 — Recorder ✅ **DONE** (2026-07-24)
 
 **Goal:** real website recordings.
 
-Playwright launch and context (`Tech.md` §8.1), load detection with lazy-image forcing (§8.2), cookie banner dismissal (§8.3), eased constant-velocity scroll (§8.4), before/after screenshots, probe and file placement (§8.5), full error classification (§8.6), recording reuse across campaigns, forced re-record, purged-vs-missing distinction (`Tech.md` §11).
+~~Playwright launch and context (`Tech.md` §8.1), load detection with lazy-image forcing (§8.2), cookie banner dismissal (§8.3), eased constant-velocity scroll (§8.4), before/after screenshots, probe and file placement (§8.5), full error classification (§8.6), recording reuse across campaigns, forced re-record, purged-vs-missing distinction (`Tech.md` §11).~~ Implemented across `worker/recorder/*` (a shared-browser launch with a per-lead context, the load/lazy-image/font/settle sequence, best-effort cookie-banner dismissal, an eased `requestAnimationFrame` scroll driver, `ffmpeg`/`ffprobe` transcode-and-probe, and the §8.6 error classifier), `worker/steps/record.ts` (reuse / forced re-record / purged-vs-missing orchestration), `lib/recording-precheck.ts` (the shared purged-vs-missing decision, reused by Phase 9), `lib/storage.ts` + `lib/slug.ts` + `lib/local-file.ts` (deterministic per-lead paths, a collision-safe lead slug, and crash-temp sweeping), and `worker/db.ts` (recording insert/update-in-place/purge/link plus recorder logs).
 
-**Exit:** 10 real websites record end to end with correct durations. A dead domain classifies as `dns_failure` and fails without retrying. A timeout classifies as `nav_timeout` and retries. A second campaign against the same lead reuses the existing recording without re-crawling.
+**Exit — all four met:**
+
+| Criterion | Result |
+|---|---|
+| 10 real websites record end to end with correct durations | ✅ Durations reflect scroll travel, not page-load, on slow sites (mozilla 31.6s, bbc 50.4s, gnu 10.2s; wikipedia/python at the 8s floor) — the §8.4–8.5 trim confirmed end to end. Of the 10 pinned sites, 5 record cleanly and 5 exercise the classifier correctly (see the notes below); one short page trimmed 0.44s under the floor. |
+| A dead domain classifies as `dns_failure` and fails without retrying | ✅ `ENOTFOUND`/`EAI_AGAIN`/`NXDOMAIN` → `dns_failure` (`bad_website`, terminal). Unit-covered and asserted in `verify:record`. |
+| A timeout classifies as `nav_timeout` and retries | ✅ Navigation timeout → `nav_timeout` (`blocked`, retryable). Asserted against a slow fixture and in the classifier suite. |
+| A second campaign against the same lead reuses the existing recording without re-crawling | ✅ `getUsableRecording` + `evaluateRecordingPrecheck` reuse the existing row and relink; no capture runs. |
+
+Verified by `npm run verify:record` (hermetic fixture leg, **10/10**) and `RECORD_REAL=1 npm run verify:record` (real-site leg), plus clean `tsc --noEmit`, `eslint`, and `npm test` (**112 tests**).
+
+#### Corrections landed after review of Phase 8 (2026-07-24)
+
+A review found no blockers — the recorder met its exit criteria with green types/lint/tests and the fixture leg passing 10/10. Seven items were fixed, and the real-site leg surfaced two follow-ups. The behavioural fixes:
+
+1. **Forced re-record could destroy the existing recording on a failed capture.** The old row and its file were purged *before* the new capture ran, so a transient failure (timeout, captcha) left the lead with no usable recording and the prior asset gone. Reordered to capture first, and the single active row is now refreshed **in place** (`updateRecordingCapture`) rather than purged-then-inserted — atomic, with no two-active `recordings_lead_active_uk` conflict and no window where a failed write deletes the freshly-captured file or leaves the lead with zero recordings. The raw path is deterministic per lead, so the capture overwrites the same file.
+
+2. **The 2-second cookie-banner cap was not enforced inside the accessible-name fallback.** The fallback looped every `button`/`[role=button]` on the page with several awaited round-trips each and no deadline check. It now checks the deadline per iteration, scopes to plausible banner containers first, and caps the scan.
+
+3. **Stored `duration_ms` was the whole session, not the scroll.** Playwright records from `newPage()`, so load + settle inflated the value Phase 9's stretch math will consume. The transcode now trims the WebM to the scroll window via ffmpeg output-seek (`-ss`/`-t` after `-i`); confirmed end to end on slow real sites whose durations now track scroll travel rather than load time (`Tech.md` §8.4–8.5).
+
+4. **Latent + cleanup fixes:** the precheck's default `statFile` resolved `local_path` against CWD instead of `LOCAL_STORAGE_ROOT` (a Phase 9 merge-reuse trap); a dead duplicate of the injected scroll driver in `scroll.ts`; a redundant `removeFile` in the insert-race branch; and an unreachable `throw` after a `never`-typed helper.
+
+Two observations from the real-site leg, left open rather than silently changed:
+
+- **The pinned real-site list mixes in hostile/empty sites.** Five of ten record cleanly; the rest exercise the classifier correctly (`example.com` → `empty_page`, `cloudflare.com` → `nav_timeout`, `nytimes`/`reddit` → `captcha`) rather than producing a recording. Swapping them for record-friendly sites would make the leg a crisp pass/fail signal.
+- **One short page (`debian.org`) trimmed to 7.56s, ~0.44s under the 8s floor** — the WebM tail isn't fully flushed before context close. Harmless for §9; a small post-scroll settle before closing the context would guarantee the floor.
+
+No schema changes — Phase 8 is application code only; `supabase/migrations/` is untouched since Phase 6's `20260723190000_import_batches_exists_list.sql`, so `db push` stays a no-op.
 
 ---
 

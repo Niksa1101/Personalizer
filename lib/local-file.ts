@@ -1,7 +1,15 @@
 import "server-only"
 
 import { createReadStream } from "node:fs"
-import { copyFile, mkdir, readdir, rename, stat, unlink } from "node:fs/promises"
+import {
+  copyFile,
+  mkdir,
+  readdir,
+  rename,
+  rm,
+  stat,
+  unlink,
+} from "node:fs/promises"
 import path from "node:path"
 
 /** Move a file, creating parent dirs; copy+unlink if rename crosses devices. */
@@ -17,6 +25,27 @@ export async function moveFile(fromAbs: string, toAbs: string): Promise<void> {
     ) {
       await copyFile(fromAbs, toAbs)
       await unlink(fromAbs)
+      return
+    }
+    throw error
+  }
+}
+
+/** Delete a file; ignore ENOENT. */
+export async function removeFile(filePath: string): Promise<void> {
+  await removeIfExists(filePath)
+}
+
+/** Recursively remove a directory; ignore ENOENT. */
+export async function removeDir(dirPath: string): Promise<void> {
+  try {
+    await rm(dirPath, { recursive: true, force: true })
+  } catch (error) {
+    if (
+      error instanceof Error &&
+      "code" in error &&
+      (error as NodeJS.ErrnoException).code === "ENOENT"
+    ) {
       return
     }
     throw error
@@ -128,6 +157,57 @@ export async function sweepStaleImportUploadTemps(
         }
         if (fileStat.mtimeMs < cutoff) {
           await removeIfExists(filePath)
+        }
+      }),
+  )
+}
+
+const REC_TMP_PREFIX = "rec-"
+
+/** Remove orphaned recorder temps left by a crash mid-capture. */
+export async function sweepStaleRecorderTemps(
+  tmpDirAbs: string,
+  maxAgeMs = 24 * 60 * 60 * 1000,
+): Promise<void> {
+  let entries: string[]
+  try {
+    entries = await readdir(tmpDirAbs)
+  } catch (error) {
+    if (
+      error instanceof Error &&
+      "code" in error &&
+      (error as NodeJS.ErrnoException).code === "ENOENT"
+    ) {
+      return
+    }
+    throw error
+  }
+
+  const cutoff = Date.now() - maxAgeMs
+  await Promise.all(
+    entries
+      .filter((name) => name.startsWith(REC_TMP_PREFIX))
+      .map(async (name) => {
+        const dirPath = path.join(tmpDirAbs, name)
+        let dirStat
+        try {
+          dirStat = await stat(dirPath)
+        } catch (error) {
+          if (
+            error instanceof Error &&
+            "code" in error &&
+            (error as NodeJS.ErrnoException).code === "ENOENT"
+          ) {
+            return
+          }
+          throw error
+        }
+        if (!dirStat.isDirectory()) {
+          await removeIfExists(dirPath)
+          return
+        }
+        if (dirStat.mtimeMs < cutoff) {
+          await removeDir(dirPath)
         }
       }),
   )

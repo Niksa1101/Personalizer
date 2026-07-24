@@ -530,9 +530,11 @@ v(t):
 
 Target duration is the recording's natural length: `page_height_px / v_target`, clamped to [8s, 90s]. The clamp bounds the stretch factor the merge step will face.
 
+Playwright records from `newPage()` through load, cookie dismissal, and settle. Transcode trims the WebM to the scroll window only (`[scrollStart, scrollStart + duration]`) via ffmpeg output-seek (`-ss`/`-t` after `-i`), so stored `duration_ms` matches the scroll plan rather than the full session.
+
 ### 8.5 Post-capture
 
-Screenshot → `screenshot_after_path`. Close the context (Playwright finalizes the video on context close, not page close — a common source of zero-byte files). Probe with `ffprobe` for `duration_ms`, `width`, `height`. Move from `tmpDir` to `{batch}/{lead-slug}/recording.mp4`. Insert `recordings`.
+Screenshot → `screenshot_after_path`. Close the context (Playwright finalizes the video on context close, not page close — a common source of zero-byte files). Transcode the scroll window to MP4, then probe with `ffprobe` for `duration_ms`, `width`, `height`. Move from `tmpDir` to `{batch}/{lead-slug}/recording.mp4`. Insert `recordings`.
 
 ### 8.6 Error classification
 
@@ -884,6 +886,15 @@ node node_modules/ffmpeg-static/install.js
 ```
 
 `ffprobe-static` is unaffected — it ships prebuilt binaries per platform.
+
+**Playwright Chromium** is required for the Phase 8 recorder (`worker/recorder/`). It is not installed by `npm install` — run:
+
+```bash
+npm run setup:browser
+# equivalent: npx playwright install chromium
+```
+
+Run `npm run verify:record` after installing Chromium to exercise the hermetic fixture leg. The network-dependent real-site leg is gated behind `RECORD_REAL=1`.
 
 **`--restart unless-stopped` on the Redis container is deliberate.** Without it, a reboot leaves Docker Desktop running but the container stopped, and the worker fails to connect with an error that points at Redis rather than at the missing container — a confusing five minutes every time the machine restarts. `unless-stopped` rather than `always` so that an explicit `docker stop pz-redis` still means stopped.
 

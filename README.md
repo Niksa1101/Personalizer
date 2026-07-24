@@ -7,7 +7,8 @@ Turn a Lead Finder CSV into personalized videos and public landing pages — one
 1. Copy `.env.example` to `.env.local` and fill all eight variables (see `docs/Tech.md` §14.1).
 2. Install dependencies: `npm install`
 3. Start the dev server: `npm run dev` — binds to **http://127.0.0.1:3000** (not `0.0.0.0`).
-4. Open http://127.0.0.1:3000 and sign in with `APP_PASSWORD`.
+4. Install Playwright Chromium for website recording: `npm run setup:browser`
+5. Open http://127.0.0.1:3000 and sign in with `APP_PASSWORD`.
 
 ## Authentication / first login
 
@@ -73,6 +74,9 @@ npm run verify:server-only
 | `npm run verify:shell` | Shell route reachability against a live dev server |
 | `npm run verify:server-only` | Negative build test — client import of Supabase client must fail |
 | `npm run verify:imports` | Dependency and binary smoke test |
+| `npm run verify:worker` | Worker and queue verification (Phase 7) |
+| `npm run verify:record` | Recorder fixture verification (Phase 8) |
+| `npm run setup:browser` | Install Playwright Chromium for website recording |
 | `npm run seed` | Seed demo data (requires Supabase) |
 | `npm run worker` | Background job worker |
 
