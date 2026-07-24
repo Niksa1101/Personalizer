@@ -2,6 +2,7 @@ import "server-only"
 
 import type { IntroVideoRow } from "@/lib/intro-types"
 import { reconcileIntroCampaignSelection } from "@/lib/intro-types"
+import { resumePausedLeadsForCampaigns } from "@/lib/pipeline-control"
 import type { Json } from "@/lib/database.types"
 import { removeIfExists } from "@/lib/local-file"
 import { introPosterRelPath, introRelPath, storageAbs } from "@/lib/storage"
@@ -159,6 +160,28 @@ export async function setIntroCampaigns(
 
     if (error) {
       throw new Error(`Failed to assign intro to campaigns: ${error.message}`)
+    }
+
+    try {
+      await resumePausedLeadsForCampaigns(selected)
+    } catch (resumeError) {
+      console.error("Failed to resume paused leads after intro assignment:", resumeError)
+      const { error: logError } = await getSupabaseAdmin().from("logs").insert({
+        level: "error",
+        scope: "web",
+        message: "Failed to resume paused leads after intro assignment",
+        meta: {
+          introId,
+          campaignIds: selected,
+          error:
+            resumeError instanceof Error
+              ? resumeError.message
+              : String(resumeError),
+        },
+      })
+      if (logError) {
+        console.error("Failed to write intro resume log:", logError.message)
+      }
     }
   }
 

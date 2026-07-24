@@ -331,6 +331,103 @@ export type Database = {
         }
         Relationships: []
       }
+      job_runs: {
+        Row: {
+          id: string
+          campaign_lead_id: string
+          step: Database["public"]["Enums"]["pipeline_step"]
+          state: Database["public"]["Enums"]["job_state"]
+          attempt: number
+          queue_job_id: string | null
+          worker_id: string | null
+          error_code: Database["public"]["Enums"]["error_code"] | null
+          error_detail: string | null
+          started_at: string
+          finished_at: string | null
+          duration_ms: number | null
+        }
+        Insert: {
+          id?: string
+          campaign_lead_id: string
+          step: Database["public"]["Enums"]["pipeline_step"]
+          state?: Database["public"]["Enums"]["job_state"]
+          attempt?: number
+          queue_job_id?: string | null
+          worker_id?: string | null
+          error_code?: Database["public"]["Enums"]["error_code"] | null
+          error_detail?: string | null
+          started_at?: string
+          finished_at?: string | null
+        }
+        Update: {
+          id?: string
+          campaign_lead_id?: string
+          step?: Database["public"]["Enums"]["pipeline_step"]
+          state?: Database["public"]["Enums"]["job_state"]
+          attempt?: number
+          queue_job_id?: string | null
+          worker_id?: string | null
+          error_code?: Database["public"]["Enums"]["error_code"] | null
+          error_detail?: string | null
+          started_at?: string
+          finished_at?: string | null
+        }
+        Relationships: []
+      }
+      recordings: {
+        Row: {
+          id: string
+          lead_id: string
+          local_path: string | null
+          duration_ms: number | null
+          width: number | null
+          height: number | null
+          page_height_px: number | null
+          file_size_bytes: number | null
+          screenshot_before_path: string | null
+          screenshot_after_path: string | null
+          recorded_at: string | null
+          purged_at: string | null
+          error_code: Database["public"]["Enums"]["error_code"] | null
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          lead_id: string
+          local_path?: string | null
+          duration_ms?: number | null
+          width?: number | null
+          height?: number | null
+          page_height_px?: number | null
+          file_size_bytes?: number | null
+          screenshot_before_path?: string | null
+          screenshot_after_path?: string | null
+          recorded_at?: string | null
+          purged_at?: string | null
+          error_code?: Database["public"]["Enums"]["error_code"] | null
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          lead_id?: string
+          local_path?: string | null
+          duration_ms?: number | null
+          width?: number | null
+          height?: number | null
+          page_height_px?: number | null
+          file_size_bytes?: number | null
+          screenshot_before_path?: string | null
+          screenshot_after_path?: string | null
+          recorded_at?: string | null
+          purged_at?: string | null
+          error_code?: Database["public"]["Enums"]["error_code"] | null
+          created_at?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
       logs: {
         Row: {
           id: number
@@ -479,6 +576,7 @@ export type Database = {
         | "unpublished"
         | "note"
       log_level: "debug" | "info" | "warn" | "error"
+      job_state: "running" | "succeeded" | "failed" | "interrupted"
       pipeline_step: "recording" | "merge" | "page" | "deploy"
       lead_status:
         | "queued"

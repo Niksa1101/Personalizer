@@ -563,17 +563,19 @@ Also: three server-rendered dates moved off raw `toLocaleString()` onto a shared
 
 #### Phase 7 — Worker and queue
 
-**Goal:** the state machine runs, with no steps implemented yet.
+**Goal:** the state machine runs, with stub steps only — no real recording, merge, page generation, or deploy.
 
-1. `worker/index.ts` — BullMQ worker, concurrency from settings, graceful shutdown.
-2. The state machine of `Tech.md` §6 with all transitions.
-3. `job_runs` and `pipeline_events` written at every transition.
-4. Retry/backoff, with `bad_website` non-retryable (§7.3).
-5. Boot recovery (§7.4).
-6. Auto-enqueue on import.
-7. Stub steps that succeed immediately.
+BullMQ worker with Redis liveness, two-scan boot recovery, retry/backoff, pause/resume, auto-enqueue on import, and `POST /api/leads/[id]/retry`.
 
-**Exit:** an import drives leads through all four stub steps to `Deployed`. Killing the worker mid-run and restarting resumes correctly with an `Interrupted` event (**this is AC-7, testable now**). A campaign with no intro parks at `Paused`/`merge`. Retries respect the limit and the bucket rules.
+| # | Criterion | Verified by |
+|---|---|---|
+| 1 | Import drives leads through all four stub steps to `deployed` with `https://stub.invalid/` URLs | `verify:worker` leg 1 |
+| 2 | Kill mid-run + restart writes `interrupted` and all leads still reach `deployed` (**AC-7**) | `verify:worker` leg 3 |
+| 3 | No intro parks at `paused`/`merge`; assigning an intro resumes | `verify:worker` leg 2 |
+| 4 | Retries respect limit and `bad_website` bucket rules | `verify:worker` leg 4 + `pipeline-retry` / `pipeline-preconditions` unit suites |
+| 5 | `typecheck`, `lint`, `test` clean; `db push` a no-op | CI / manual |
+
+No schema changes — `supabase/migrations/` untouched since Phase 6's `20260723190000_import_batches_exists_list.sql`.
 
 ---
 

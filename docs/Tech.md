@@ -416,13 +416,29 @@ Retry policy is worker-side, not a database constraint, precisely so the limit c
 
 ### 7.4 Interruption recovery
 
-On boot, before consuming any new work, the worker:
+Recovery uses **two scans**, not one — they answer different questions and must run in order on boot. Both share one `listOpenJobRuns()` and one `scanLiveWorkers()` per reconcile tick.
 
-1. Selects `campaign_leads WHERE status='processing'` (served by the partial index `campaign_leads_processing_idx`, `DB.md` §6).
-2. For each, checks whether BullMQ still holds an active job with that id.
-3. If not, the process died mid-step: mark the open `job_runs` row `interrupted`, write an `interrupted` pipeline event, and re-enqueue at `current_step`.
+| Scan | Query | Liveness test | Writes |
+|---|---|---|---|
+| **Lead-status scan** (re-enqueue driver) | `campaign_leads WHERE status IN ('queued','processing')` | BullMQ `queue.getJob(id)`: `waiting`/`delayed` → live; `active` → live **iff** the worker owning the lead's open `job_runs` row still has a Redis liveness key; otherwise dead | Closes its own open run row → `interrupted`; writes the `interrupted` pipeline event; re-enqueues |
+| **Run-row scan** (cleanup driver) | `job_runs WHERE state='running'` (minus rows the lead-status scan already closed) | `worker_id` has no live Redis liveness key (`pz:worker:alive:{host:pid}`, TTL 15s) | Closes row → `interrupted`. **No event** — its rows can belong to `paused`/`failed` leads with nothing to resume |
 
-Recovery is automatic and needs no Admin action. The event exists so the timeline explains the gap rather than showing an unexplained restart.
+The `interrupted` event AC-7 asserts comes from the **lead-status scan**. For `waiting`/`delayed` jobs it is keyed on BullMQ alone; for `active` jobs it cross-checks the worker liveness key — instant after a graceful stop (key deleted on shutdown), **≤15s after a hard kill** (key TTL).
+
+`finished_at` is left **NULL** on both interrupted paths (`DB.md` §5.9). `attempt_count` is untouched — interruption is free (it is not a failure). `paused` is not in either scan's status set.
+
+A re-enqueue may be dropped while a stale job still holds its BullMQ lock (`lockDuration` 30s). Harmless: the lead stays `processing`, `claimLead` accepts `processing`, and BullMQ's stalled-check redelivery is functionally identical.
+
+**Boot order** (before consuming):
+
+1. Register the liveness key and start its refresh interval (every 5s).
+2. Lead-status scan — no grace window.
+3. Run-row scan.
+4. Start consuming.
+
+**Periodic reconcile:** every 60s while running, both scans again. The lead-status scan applies a 60s `updated_at` grace window so it does not race the `completed` listener's retry re-enqueue. A tick that is still running when the next interval fires is **skipped** (overlap guard), not stacked.
+
+**Shutdown:** stop claiming → drain in-flight work (30s cap) → delete the liveness key → exit. A `ShutdownError` during the in-flight step leaves the run row open for boot recovery.
 
 Partial files from a killed step are overwritten by the re-run — steps write to their final path only after success, staging through a `.tmp` sibling first.
 
@@ -694,7 +710,7 @@ All local paths are stored **relative to `LOCAL_STORAGE_ROOT`** (`DB.md` §3), s
 
 The distinction is the whole point: purging is our own scheduled behavior and should be invisible; unexpected absence is a signal.
 
-> **Gap found in Phase 1 — a third case exists.** The list above covers *purged* and *unexpectedly absent*, but not **never recorded**: no `recordings` row at all, while `current_step` is already past `recording`. That is exactly the state the seed creates (`DB.md` §10.1) and the state AC-4 walks through, so it is not hypothetical. The correct behaviour is almost certainly to record first and continue — it matches the purged case, and `missing_asset` would strand the demo campaign on a fresh clone with no way forward from the UI. **Resolve in Phase 7**, where the state machine is built; the recorder step it depends on lands in Phase 8.
+> **Resolved in Phase 7.** When `merge` is reached and the campaign has an intro but no usable `recordings` row (never recorded, or only purged/failed rows remain), the worker sets `current_step='recording'`, writes a `note` event, and continues the walk — record-first-and-continue, **at most once per job**. A second arrival at `merge` without a usable recording proceeds and lets the real merge step (Phases 8–11) raise `missing_asset`. Phase 7's merge stub succeeds, so the redirect self-corrects. Pausing for a missing intro (`intro_missing`) is unchanged.
 
 ---
 
@@ -830,12 +846,13 @@ npm run worker
   "dev": "next dev -H 127.0.0.1",
   "build": "next build",
   "start": "next start -H 127.0.0.1",
-  "worker": "tsx --env-file-if-exists=.env.local worker/index.ts",
+  "worker": "tsx --conditions react-server --env-file-if-exists=.env.local worker/index.ts",
   "seed": "tsx --env-file-if-exists=.env.local scripts/seed.ts",
   "typecheck": "tsc --noEmit",
   "test": "node --import tsx --test \"lib/**/*.test.ts\"",
   "verify:imports": "tsx scripts/verify-imports.ts",
   "verify:auth": "tsx --env-file-if-exists=.env.local scripts/verify-auth.ts",
+  "verify:worker": "tsx --conditions react-server --env-file-if-exists=.env.local scripts/verify-worker.ts",
   "lint": "eslint"
 }
 ```
@@ -845,6 +862,15 @@ npm run worker
 `verify:auth` deliberately trips the throttle (it asserts that a correct password during a lockout still returns an identical `401`), which leaves the in-memory limiter poisoned for up to fifteen minutes. **Restart the dev server before a manual browser pass**, or the first real login will look broken. `node --test` is used rather than a framework because `tsx` is already a dependency — there is no runner to install.
 
 **`--env-file-if-exists` is load-bearing.** Next.js loads `.env.local` automatically; `tsx` does not. Without the flag the worker starts with an empty environment and fails its own startup check, which looks like a configuration bug and is not one. The `-if-exists` variant (Node 22+) means a missing file is a warning rather than a crash, so CI and a fresh clone still run.
+
+**`--conditions react-server` is required for `worker` and `verify:worker`.** `server-only` resolves to a throwing stub unless the `react-server` export condition is set. Both scripts import `lib/` modules that carry that marker (`lib/supabase.ts`, `lib/queue.ts`, …). Plain `npx tsx worker/index.ts` fails with *"This module cannot be imported from a Client Component module"*.
+
+Optional worker tuning (bare `process.env` reads, not in `lib/env.ts`):
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `PIPELINE_RETRY_BASE_MS` | `30000` | Retry backoff base (→ 30s, 60s) |
+| `PIPELINE_STUB_STEP_MS` | `500` | Artificial per-step delay in Phase 7 stubs |
 
 > **Framework note — what changed and why.** `-H 127.0.0.1` is explicit and required. In Next.js 16 `--hostname` *"Default: 0.0.0.0"* (`01-app/03-api-reference/06-cli/next.md:71`), which exposes the dev server to the whole local network. This app holds every lead's contact details behind one shared password; on a café or coworking Wi-Fi, the default binding puts that on the network. Binding to loopback is the correct posture for a local-only admin tool.
 
@@ -889,7 +915,8 @@ node node_modules/ffmpeg-static/install.js
 2. **`fullscreen_intro` layout** — §9.2 notes the master clock does not apply in that mode. The intended behavior when intro and recording lengths differ is undefined.
 3. **Netlify rate limits** (risk 8).
 4. **No public poster frame** (raised in Phase 1; `DB.md` §11 item 5). §10.2 requires poster + play precisely because a poster loads faster than a video header on a cold mobile view — but `videos.poster_path` is local-only and `DB.md` §8 puts nothing but the video in the bucket, so there is no URL to put in `<video poster>`. Either upload the poster as a second small object and add a `{{poster_url}}` placeholder to `DB.md` §5.1.1, or accept `preload="metadata"` as a deliberate compromise and say so. **Decide in Phase 10.**
-5. **Merge with no recording at all** (raised in Phase 1; §11 above). **Decide in Phase 7.**
+5. **Merge with no recording at all** — **resolved in Phase 7.** Record-first-and-continue at most once per job; a second visit proceeds (see §11).
+6. **Dry-run terminal status** (raised in Phase 7). `dry_run` produces no `netlify_url`, and `campaign_leads_deployed_url_ck` forbids `status='deployed'` without one. Phase 7 sidesteps this with a synthetic stub URL; Phase 11 cannot. **Decide in Phase 11.**
 
 ---
 
