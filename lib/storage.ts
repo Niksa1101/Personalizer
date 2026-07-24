@@ -32,3 +32,29 @@ export function importUploadTempRelPath(token: string): string {
 export function importBatchCsvRelPath(slug: string): string {
   return `imports/${slug}.csv`
 }
+
+/** Raw Playwright capture: `{batch}/{lead-slug}/recording.mp4`. */
+export function recordingRelPath(batchId: string, leadSlugValue: string): string {
+  return `${batchId}/${leadSlugValue}/recording.mp4`
+}
+
+/** Debug screenshot before scroll: `{batch}/{lead-slug}/screenshot-before.png`. */
+export function screenshotBeforeRelPath(
+  batchId: string,
+  leadSlugValue: string,
+): string {
+  return `${batchId}/${leadSlugValue}/screenshot-before.png`
+}
+
+/** Debug screenshot after scroll: `{batch}/{lead-slug}/screenshot-after.png`. */
+export function screenshotAfterRelPath(
+  batchId: string,
+  leadSlugValue: string,
+): string {
+  return `${batchId}/${leadSlugValue}/screenshot-after.png`
+}
+
+/** In-flight Playwright WebM workspace: `tmp/rec-{token}/`. */
+export function recordingTmpDirRelPath(token: string): string {
+  return `tmp/rec-${token}`
+}
