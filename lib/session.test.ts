@@ -54,8 +54,14 @@ describe('session tokens', () => {
   })
 
   it('returns null for a tampered token', async () => {
-    const token = await signSession()
-    const tampered = token.slice(0, -1) + (token.endsWith('a') ? 'b' : 'a')
+    const [header, payload, signature] = (await signSession()).split('.')
+    // Flip a character in the *middle* of the signature. Mutating only the final
+    // base64url char can leave the decoded 32-byte signature identical — its low
+    // bits are unused padding — which made this assertion intermittently pass a
+    // forged token. A middle char is fully significant, so the bytes always change.
+    const mid = Math.floor(signature.length / 2)
+    const flipped = signature[mid] === 'A' ? 'B' : 'A'
+    const tampered = `${header}.${payload}.${signature.slice(0, mid)}${flipped}${signature.slice(mid + 1)}`
 
     assert.equal(await verifySessionToken(tampered), null)
   })
