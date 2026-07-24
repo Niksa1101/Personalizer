@@ -1,0 +1,463 @@
+import type { Database } from "@/lib/database.types"
+import type {
+  ErrorCode,
+  EventKind,
+  PipelineEventMeta,
+  PipelineStep,
+} from "@/lib/pipeline-types"
+import { getSupabaseAdmin } from "@/lib/supabase"
+
+type CampaignLeadRow = Database["public"]["Tables"]["campaign_leads"]["Row"]
+type JobRunRow = Database["public"]["Tables"]["job_runs"]["Row"]
+
+export type LeadContext = {
+  campaignLead: CampaignLeadRow
+  campaign: {
+    id: string
+    slug: string
+    intro_video_id: string | null
+  }
+  lead: {
+    id: string
+    domain: string | null
+    website_url: string | null
+  }
+  hasUsableRecording: boolean
+}
+
+export type JobSettings = {
+  autoRetryLimit: number
+}
+
+export type LeadBase = {
+  campaignLead: CampaignLeadRow
+  campaign: LeadContext["campaign"]
+  lead: LeadContext["lead"]
+}
+
+export type ClaimResult = "claimed" | "skipped" | "gone"
+
+const SCAN_LIMIT = 500
+
+export async function loadLeadBase(
+  campaignLeadId: string,
+): Promise<LeadBase | null> {
+  const { data: campaignLead, error } = await getSupabaseAdmin()
+    .from("campaign_leads")
+    .select("*")
+    .eq("id", campaignLeadId)
+    .maybeSingle()
+
+  if (error) {
+    throw new Error(`Failed to load campaign lead: ${error.message}`)
+  }
+  if (!campaignLead) return null
+
+  const [{ data: campaign, error: campaignError }, { data: lead, error: leadError }] =
+    await Promise.all([
+      getSupabaseAdmin()
+        .from("campaigns")
+        .select("id, slug, intro_video_id")
+        .eq("id", campaignLead.campaign_id)
+        .maybeSingle(),
+      getSupabaseAdmin()
+        .from("leads")
+        .select("id, domain, website_url")
+        .eq("id", campaignLead.lead_id)
+        .maybeSingle(),
+    ])
+
+  if (campaignError) {
+    throw new Error(`Failed to load campaign: ${campaignError.message}`)
+  }
+  if (leadError) {
+    throw new Error(`Failed to load lead: ${leadError.message}`)
+  }
+  if (!campaign || !lead) {
+    throw new Error(`Campaign lead ${campaignLeadId} is missing campaign or lead`)
+  }
+
+  return { campaignLead, campaign, lead }
+}
+
+export async function reloadCampaignLead(
+  campaignLeadId: string,
+): Promise<CampaignLeadRow | null> {
+  const { data, error } = await getSupabaseAdmin()
+    .from("campaign_leads")
+    .select("*")
+    .eq("id", campaignLeadId)
+    .maybeSingle()
+
+  if (error) {
+    throw new Error(`Failed to reload campaign lead: ${error.message}`)
+  }
+  return data
+}
+
+export async function checkUsableRecording(leadId: string): Promise<boolean> {
+  const { count, error } = await getSupabaseAdmin()
+    .from("recordings")
+    .select("id", { count: "exact", head: true })
+    .eq("lead_id", leadId)
+    .is("purged_at", null)
+    .is("error_code", null)
+
+  if (error) {
+    throw new Error(`Failed to check recordings: ${error.message}`)
+  }
+
+  return (count ?? 0) > 0
+}
+
+/**
+ * Conditional claim: update first; only if zero rows, select to distinguish
+ * deleted (`gone`) from moved-on (`skipped`). `started_at` is set once on
+ * first pickup and never overwritten (DB.md §5.4).
+ */
+export async function claimLead(campaignLeadId: string): Promise<ClaimResult> {
+  const now = new Date().toISOString()
+
+  const { data: firstPickup, error: firstError } = await getSupabaseAdmin()
+    .from("campaign_leads")
+    .update({ status: "processing", started_at: now })
+    .eq("id", campaignLeadId)
+    .eq("status", "queued")
+    .is("started_at", null)
+    .select("id")
+    .maybeSingle()
+
+  if (firstError) {
+    throw new Error(`Failed to claim lead: ${firstError.message}`)
+  }
+  if (firstPickup) return "claimed"
+
+  const { data: requeued, error: requeuedError } = await getSupabaseAdmin()
+    .from("campaign_leads")
+    .update({ status: "processing" })
+    .eq("id", campaignLeadId)
+    .eq("status", "queued")
+    .select("id")
+    .maybeSingle()
+
+  if (requeuedError) {
+    throw new Error(`Failed to claim lead: ${requeuedError.message}`)
+  }
+  if (requeued) return "claimed"
+
+  const { data: fromProcessing, error: processingError } = await getSupabaseAdmin()
+    .from("campaign_leads")
+    .update({ status: "processing" })
+    .eq("id", campaignLeadId)
+    .eq("status", "processing")
+    .select("id")
+    .maybeSingle()
+
+  if (processingError) {
+    throw new Error(`Failed to claim lead: ${processingError.message}`)
+  }
+  if (fromProcessing) return "claimed"
+
+  const { data: exists, error: existsError } = await getSupabaseAdmin()
+    .from("campaign_leads")
+    .select("id")
+    .eq("id", campaignLeadId)
+    .maybeSingle()
+
+  if (existsError) {
+    throw new Error(`Failed to check lead existence: ${existsError.message}`)
+  }
+
+  return exists ? "skipped" : "gone"
+}
+
+export async function insertPipelineEvent(input: {
+  campaignLeadId: string
+  kind: EventKind
+  message: string
+  step?: PipelineStep | null
+  errorCode?: ErrorCode | null
+  meta?: PipelineEventMeta
+}): Promise<void> {
+  const { error } = await getSupabaseAdmin().from("pipeline_events").insert({
+    campaign_lead_id: input.campaignLeadId,
+    kind: input.kind,
+    step: input.step ?? null,
+    message: input.message,
+    error_code: input.errorCode ?? null,
+    meta: (input.meta ?? {}) as Database["public"]["Tables"]["pipeline_events"]["Insert"]["meta"],
+  })
+
+  if (error) {
+    throw new Error(`Failed to insert pipeline event: ${error.message}`)
+  }
+}
+
+export async function openJobRun(input: {
+  campaignLeadId: string
+  step: PipelineStep
+  attempt: number
+  queueJobId: string
+  workerId: string
+}): Promise<string> {
+  const { data, error } = await getSupabaseAdmin()
+    .from("job_runs")
+    .insert({
+      campaign_lead_id: input.campaignLeadId,
+      step: input.step,
+      state: "running",
+      attempt: input.attempt,
+      queue_job_id: input.queueJobId,
+      worker_id: input.workerId,
+    })
+    .select("id")
+    .single()
+
+  if (error) {
+    throw new Error(`Failed to open job run: ${error.message}`)
+  }
+
+  return data.id
+}
+
+export async function closeJobRun(
+  jobRunId: string,
+  state: Database["public"]["Enums"]["job_state"],
+  error?: { code: ErrorCode; detail: string },
+): Promise<void> {
+  const update: Database["public"]["Tables"]["job_runs"]["Update"] = {
+    state,
+    error_code: error?.code ?? null,
+    error_detail: error?.detail ?? null,
+  }
+
+  if (state !== "interrupted") {
+    update.finished_at = new Date().toISOString()
+  }
+
+  const { error: updateError } = await getSupabaseAdmin()
+    .from("job_runs")
+    .update(update)
+    .eq("id", jobRunId)
+    .eq("state", "running")
+
+  if (updateError) {
+    throw new Error(`Failed to close job run: ${updateError.message}`)
+  }
+}
+
+export async function closeOpenJobRunForLead(
+  campaignLeadId: string,
+  state: Database["public"]["Enums"]["job_state"],
+): Promise<string | null> {
+  const { data: openRun, error: readError } = await getSupabaseAdmin()
+    .from("job_runs")
+    .select("id")
+    .eq("campaign_lead_id", campaignLeadId)
+    .eq("state", "running")
+    .order("started_at", { ascending: false })
+    .limit(1)
+    .maybeSingle()
+
+  if (readError) {
+    throw new Error(`Failed to read open job run: ${readError.message}`)
+  }
+  if (!openRun) return null
+
+  await closeJobRun(openRun.id, state)
+  return openRun.id
+}
+
+export async function updateLeadAfterStepSuccess(input: {
+  campaignLeadId: string
+  nextStep: PipelineStep | null
+}): Promise<void> {
+  const update: Database["public"]["Tables"]["campaign_leads"]["Update"] = {
+    attempt_count: 0,
+    error_code: null,
+    error_detail: null,
+  }
+
+  if (input.nextStep) {
+    update.current_step = input.nextStep
+  }
+
+  const { error } = await getSupabaseAdmin()
+    .from("campaign_leads")
+    .update(update)
+    .eq("id", input.campaignLeadId)
+
+  if (error) {
+    throw new Error(`Failed to update lead after step success: ${error.message}`)
+  }
+}
+
+export async function markLeadDeployed(input: {
+  campaignLeadId: string
+  netlifyUrl: string
+}): Promise<void> {
+  const now = new Date().toISOString()
+  const { error } = await getSupabaseAdmin()
+    .from("campaign_leads")
+    .update({
+      status: "deployed",
+      netlify_url: input.netlifyUrl,
+      deployed_at: now,
+      attempt_count: 0,
+      error_code: null,
+      error_detail: null,
+    })
+    .eq("id", input.campaignLeadId)
+
+  if (error) {
+    throw new Error(`Failed to mark lead deployed: ${error.message}`)
+  }
+}
+
+export async function markLeadPaused(input: {
+  campaignLeadId: string
+}): Promise<void> {
+  const { error } = await getSupabaseAdmin()
+    .from("campaign_leads")
+    .update({
+      status: "paused",
+      current_step: "merge",
+      error_code: "intro_missing",
+      error_detail: "Campaign has no intro video assigned.",
+    })
+    .eq("id", input.campaignLeadId)
+
+  if (error) {
+    throw new Error(`Failed to pause lead: ${error.message}`)
+  }
+}
+
+export async function markLeadFailed(input: {
+  campaignLeadId: string
+  errorCode: ErrorCode
+  errorDetail: string
+}): Promise<void> {
+  const { error } = await getSupabaseAdmin()
+    .from("campaign_leads")
+    .update({
+      status: "failed",
+      error_code: input.errorCode,
+      error_detail: input.errorDetail,
+    })
+    .eq("id", input.campaignLeadId)
+
+  if (error) {
+    throw new Error(`Failed to mark lead failed: ${error.message}`)
+  }
+}
+
+export async function scheduleRetry(input: {
+  campaignLeadId: string
+  attemptCount: number
+  step: PipelineStep
+  errorCode: ErrorCode
+  errorDetail: string
+}): Promise<void> {
+  const { error } = await getSupabaseAdmin()
+    .from("campaign_leads")
+    .update({
+      status: "processing",
+      attempt_count: input.attemptCount,
+      error_code: input.errorCode,
+      error_detail: input.errorDetail,
+    })
+    .eq("id", input.campaignLeadId)
+
+  if (error) {
+    throw new Error(`Failed to schedule retry: ${error.message}`)
+  }
+}
+
+export async function setCurrentStep(
+  campaignLeadId: string,
+  step: PipelineStep,
+): Promise<void> {
+  const { error } = await getSupabaseAdmin()
+    .from("campaign_leads")
+    .update({ current_step: step })
+    .eq("id", campaignLeadId)
+
+  if (error) {
+    throw new Error(`Failed to set current step: ${error.message}`)
+  }
+}
+
+export async function writeWorkerLog(input: {
+  level: Database["public"]["Enums"]["log_level"]
+  message: string
+  campaignLeadId?: string | null
+  jobRunId?: string | null
+  meta?: Record<string, unknown>
+}): Promise<void> {
+  const { error } = await getSupabaseAdmin().from("logs").insert({
+    level: input.level,
+    scope: "worker",
+    message: input.message,
+    campaign_lead_id: input.campaignLeadId ?? null,
+    job_run_id: input.jobRunId ?? null,
+    meta: (input.meta ?? {}) as Database["public"]["Tables"]["logs"]["Insert"]["meta"],
+  })
+
+  if (error) {
+    console.error("[worker] failed to write log:", error.message)
+  }
+}
+
+export async function listRecoverableLeads(graceMs?: number): Promise<
+  Array<Pick<CampaignLeadRow, "id" | "status" | "updated_at" | "current_step">>
+> {
+  let query = getSupabaseAdmin()
+    .from("campaign_leads")
+    .select("id, status, updated_at, current_step")
+    .in("status", ["queued", "processing"])
+
+  if (graceMs != null && graceMs > 0) {
+    const cutoff = new Date(Date.now() - graceMs).toISOString()
+    query = query.lt("updated_at", cutoff)
+  }
+
+  const { data, error } = await query
+    .order("updated_at", { ascending: true })
+    .limit(SCAN_LIMIT)
+  if (error) {
+    throw new Error(`Failed to list recoverable leads: ${error.message}`)
+  }
+
+  if ((data?.length ?? 0) >= SCAN_LIMIT) {
+    console.warn(
+      `[recovery] listRecoverableLeads hit limit of ${SCAN_LIMIT}; backlog remains`,
+    )
+  }
+
+  return data ?? []
+}
+
+export async function listOpenJobRuns(): Promise<
+  Array<
+    Pick<JobRunRow, "id" | "worker_id" | "campaign_lead_id" | "started_at">
+  >
+> {
+  const { data, error } = await getSupabaseAdmin()
+    .from("job_runs")
+    .select("id, worker_id, campaign_lead_id, started_at")
+    .eq("state", "running")
+    .order("started_at", { ascending: false })
+    .limit(SCAN_LIMIT)
+
+  if (error) {
+    throw new Error(`Failed to list open job runs: ${error.message}`)
+  }
+
+  if ((data?.length ?? 0) >= SCAN_LIMIT) {
+    console.warn(
+      `[recovery] listOpenJobRuns hit limit of ${SCAN_LIMIT}; backlog remains`,
+    )
+  }
+
+  return data ?? []
+}

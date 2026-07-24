@@ -28,6 +28,7 @@ import {
   importUploadTempRelPath,
   storageAbs,
 } from "@/lib/storage"
+import { enqueueLead } from "@/lib/queue"
 import { getSupabaseAdmin } from "@/lib/supabase"
 
 export type ImportBatchWithCampaign = ImportBatchRow & {
@@ -326,6 +327,35 @@ export async function commitImport(
     })
     if (logError) {
       console.error("Failed to write importer log:", logError.message)
+    }
+  }
+
+  const createdIds = rpc.created_campaign_lead_ids ?? []
+  if (createdIds.length > 0) {
+    let enqueueFailures = 0
+    for (const id of createdIds) {
+      try {
+        const landed = await enqueueLead(id)
+        if (!landed) enqueueFailures++
+      } catch (error) {
+        enqueueFailures++
+        console.error(`Failed to enqueue campaign lead ${id}:`, error)
+      }
+    }
+    if (enqueueFailures > 0) {
+      const { error: logError } = await getSupabaseAdmin().from("logs").insert({
+        level: "error",
+        scope: "importer",
+        message: "Failed to enqueue one or more leads after import commit",
+        meta: {
+          batchId: rpc.batch_id,
+          failedCount: enqueueFailures,
+          totalCount: createdIds.length,
+        },
+      })
+      if (logError) {
+        console.error("Failed to write importer enqueue log:", logError.message)
+      }
     }
   }
 
