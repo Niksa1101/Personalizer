@@ -19,6 +19,7 @@
     "verify:worker": "tsx --conditions react-server --env-file-if-exists=.env.local scripts/verify-worker.ts",
     "verify:record": "tsx --conditions react-server --env-file-if-exists=.env.local scripts/verify-record.ts",
     "verify:merge": "tsx --conditions react-server scripts/verify-merge.ts",
+    "verify:page": "tsx scripts/verify-page.ts",
     "setup:browser": "playwright install chromium",
     "verify:server-only": "tsx scripts/verify-server-only.ts",
     "lint": "eslint"

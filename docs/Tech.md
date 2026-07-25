@@ -663,9 +663,9 @@ Final path: `/{campaign-slug}/{lead-slug}` → `https://{site}.netlify.app/acme-
 Requirements the template must satisfy:
 
 - **Mobile-first.** Most recipients open outreach on a phone.
-- **Poster + play button**, not autoplay. `<video>` with `poster`, `preload="metadata"`, `playsinline`, `controls`. Autoplay is blocked on mobile anyway, and a poster frame loads far faster than a video header.
+- **Poster + play button**, not autoplay. `<video>` with `poster`, `preload="none"`, `playsinline`, `controls`. Autoplay is blocked on mobile anyway, and a poster frame loads far faster than a video header. When no poster URL is available, the generator strips an empty `poster=""` and downgrades to `preload="metadata"` — a deliberate fallback that opens a video connection before play; leads merged before Phase 10 stay in this state until a `step:merge` uploads a poster.
 - `<meta name="robots" content="noindex, nofollow">`, reinforced by a site-level `robots.txt` `Disallow: /`. These pages name individual businesses and must not be indexed.
-- **No tracking.** No analytics, no pixels, no third-party requests. The page's only external fetch is the Supabase video URL.
+- **No tracking.** No analytics, no pixels, no third-party requests. Every external fetch goes to the one Supabase origin (poster on load, video on play). A 404 `/favicon.ico` from the page's own origin is expected.
 - Self-contained: inline CSS, no CDN dependencies.
 
 Rendered HTML is stored in `landing_pages.html` with its SHA-1 in `content_sha1`.
@@ -702,6 +702,8 @@ Deploys are **serialized** — one in flight at a time, guarded by a Redis lock.
 | 1080p master | Local `{batch}/{lead-slug}/final.mp4` | Indefinite |
 | 720p web (local) | Local `{batch}/{lead-slug}/web.mp4` | Deleted after upload + deploy |
 | 720p web (remote) | Supabase `lead-videos/{uuid}/final.mp4` | Indefinite |
+| Poster (local) | Local `{batch}/{lead-slug}/poster.jpg` | Indefinite — admin thumbnail |
+| Poster (remote) | Supabase `lead-videos/{uuid}/poster.jpg` | Indefinite — `cacheControl: 3600` (key is reused on self-heal) |
 | Intro (normalized) | Local `intros/{id}.mp4` | Indefinite |
 | Debug screenshots | Local `{batch}/{lead-slug}/*.png` | 30 days, kept for `failed` |
 | Landing HTML | PostgreSQL `landing_pages.html` | Indefinite |
@@ -900,6 +902,8 @@ npm run setup:browser
 
 Run `npm run verify:record` after installing Chromium to exercise the hermetic fixture leg. The network-dependent real-site leg is gated behind `RECORD_REAL=1`.
 
+`npm run verify:page` is hermetic — no env file, no database. It generates a landing page from fixtures, serves it over two local HTTP origins (page + Supabase stand-in), and drives Chromium at 375px and 1920px with request interception. Run after `npm run setup:browser`.
+
 **`--restart unless-stopped` on the Redis container is deliberate.** Without it, a reboot leaves Docker Desktop running but the container stopped, and the worker fails to connect with an error that points at Redis rather than at the missing container — a confusing five minutes every time the machine restarts. `unless-stopped` rather than `always` so that an explicit `docker stop pz-redis` still means stopped.
 
 `npm run verify:imports` checks both binaries exist on disk, not merely that the modules import. Run it after any fresh `npm install`.
@@ -929,7 +933,7 @@ Run `npm run verify:record` after installing Chromium to exercise the hermetic f
 1. **Master retention** (risk 5) — indefinite is stated but untested against real disk growth.
 2. **`fullscreen_intro` layout** — §9.2 notes the master clock does not apply in that mode. The intended behavior when intro and recording lengths differ is undefined.
 3. **Netlify rate limits** (risk 8).
-4. **No public poster frame** (raised in Phase 1; `DB.md` §11 item 5). §10.2 requires poster + play precisely because a poster loads faster than a video header on a cold mobile view — but `videos.poster_path` is local-only and `DB.md` §8 puts nothing but the video in the bucket, so there is no URL to put in `<video poster>`. Either upload the poster as a second small object and add a `{{poster_url}}` placeholder to `DB.md` §5.1.1, or accept `preload="metadata"` as a deliberate compromise and say so. **Decide in Phase 10.**
+4. ~~**No public poster frame**~~ — **resolved in Phase 10.** Merge uploads `poster.jpg` beside the video; page derives `{{poster_url}}` from `videos.poster_storage_key`. See `DB.md` §11 item 5.
 5. **Merge with no recording at all** — **resolved in Phase 7.** Record-first-and-continue at most once per job; a second visit proceeds (see §11).
 6. **Dry-run terminal status** (raised in Phase 7). `dry_run` produces no `netlify_url`, and `campaign_leads_deployed_url_ck` forbids `status='deployed'` without one. Phase 7 sidesteps this with a synthetic stub URL; Phase 11 cannot. **Decide in Phase 11.**
 

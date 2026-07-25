@@ -12,6 +12,7 @@ import { createClient } from "@supabase/supabase-js"
 import type { Database } from "../lib/database.types"
 import { assertEnvOrExit } from "../lib/env-node"
 import type { PreviewResult } from "../lib/import-types"
+import { SLUG_REGEX } from "../lib/slug"
 
 const BASE_URL = "http://127.0.0.1:3000"
 
@@ -304,6 +305,59 @@ async function main(): Promise<void> {
         pass("ragged row rejection", "line 2")
       }
     }
+
+    const slugDomains = [
+      `slug-a-${runId}.example.com`,
+      `slug-b-${runId}.example.com`,
+    ]
+    const slugCsv = [
+      "company,city,website",
+      `Acme Plumbing,Portland,https://${slugDomains[0]}`,
+      `Acme Plumbing,Portland,https://${slugDomains[1]}`,
+    ].join("\n")
+    const slugPath = path.join(tempDir, "slug-collision.csv")
+    writeFileSync(slugPath, slugCsv, "utf8")
+
+    const slugPreview = await uploadPreview(campaignA.id, slugPath, "slug-collision.csv")
+    if (!slugPreview.token) {
+      fail("slug collision preview", slugPreview.error ?? "missing token")
+    } else if (slugPreview.counts.imported !== 2) {
+      fail("slug collision imports", `imported=${slugPreview.counts.imported}`)
+    } else {
+      pass("slug collision preview", "2 new rows")
+    }
+
+    const slugCommit = await commitImport(slugPreview, campaignA.id, "slug-collision.csv")
+    if (!slugCommit.batchId) {
+      fail("slug collision commit", slugCommit.error ?? "missing batchId")
+    } else {
+      batchIds.push(slugCommit.batchId)
+      pass("slug collision commit")
+    }
+
+    const { data: slugRows, error: slugRowsError } = await supabase
+      .from("campaign_leads")
+      .select("slug, leads!inner(domain)")
+      .eq("campaign_id", campaignA.id)
+      .in("leads.domain", slugDomains)
+
+    if (slugRowsError || (slugRows?.length ?? 0) !== 2) {
+      fail(
+        "slug collision rows",
+        slugRowsError?.message ?? `expected 2 rows, got ${slugRows?.length ?? 0}`,
+      )
+    } else {
+      const slugs = slugRows!.map((row) => row.slug)
+      if (slugs[0] === slugs[1]) {
+        fail("identical name+city slugs differ", `both are ${slugs[0]}`)
+      } else if (!slugs.every((slug) => SLUG_REGEX.test(slug))) {
+        fail("slug regex", slugs.join(", "))
+      } else {
+        pass("identical name+city slugs differ", slugs.join(" vs "))
+      }
+    }
+
+    leadDomains = [...leadDomains, ...slugDomains]
   } catch (error) {
     fail(
       "verify:import",

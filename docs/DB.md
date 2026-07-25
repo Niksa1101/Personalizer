@@ -345,6 +345,7 @@ Every `leads` column is exposed by name, plus two computed values:
 | `{{email}}` `{{phone}}` `{{website_url}}` `{{industry}}` | `leads` |
 | `{{ref}}` | `leads.ref` (`LD-0042`) |
 | `{{video_url}}` | `videos.web_public_url` — the Supabase public URL |
+| `{{poster_url}}` | Derived from `videos.poster_storage_key` — the public URL of the uploaded poster JPEG beside the video. Empty when no poster has been uploaded; the generator strips an empty `poster=""` and downgrades `preload="none"` → `preload="metadata"`. |
 | `{{cta_url}}` `{{cta_label}}` | `campaigns` |
 
 Unknown placeholders render empty rather than erroring; missing values must not block a deploy.
@@ -531,7 +532,8 @@ The merged output for one `campaign_lead`. Two artifacts: a 1080p master kept lo
 | `used_speed_floor` | `boolean` | no | `false` | True when the ~2.5× cap was hit and the fallback applied: floor the scroll speed and hold at the bottom. |
 | `master_size_bytes` | `bigint` | yes | — | |
 | `web_size_bytes` | `bigint` | yes | — | |
-| `poster_path` | `text` | yes | — | Landing-page poster frame. |
+| `poster_path` | `text` | yes | — | Landing-page poster frame (local). Kept indefinitely as the admin thumbnail. |
+| `poster_storage_key` | `text` | yes | — | Supabase Storage object key: `{video prefix}/poster.jpg`. Unique. No separate `poster_public_url` column — the URL is derived at generation time, same as the video key pattern but one fewer column that can disagree. |
 | `encoded_at` | `timestamptz` | yes | — | |
 | `uploaded_at` | `timestamptz` | yes | — | Web version reached Supabase Storage. |
 | `created_at` | `timestamptz` | no | `now()` | |
@@ -1017,6 +1019,6 @@ Carried into `Tech.md` review rather than resolved here:
 
 Raised by the Phase 1 implementation, and **not** resolvable in the schema:
 
-5. **No public poster frame.** `videos.poster_path` is a local artifact and §8 puts only the video in the bucket, so a landing page has no URL to put in `<video poster>`. But `Tech.md` §10.2 requires "poster + play button, not autoplay", explicitly because a poster loads far faster than a video header on a cold mobile view. The seeded template falls back to `preload="metadata"`, which makes the browser render the first frame — visually close, but it still opens a connection to the video before the recipient presses play, which is the cost §10.2 was trying to avoid. Resolving it means either uploading the poster alongside the video (a second small object, and a `{{poster_url}}` placeholder in §5.1.1) or accepting the fallback deliberately. **Decide in Phase 10**, where the template is built for real.
+5. ~~**No public poster frame.**~~ **Resolved in Phase 10.** The merge step uploads `poster.jpg` beside the video (`videos.poster_storage_key`, key `{video prefix}/poster.jpg`); the page step derives `{{poster_url}}` from it. Posters encoded at 720px wide (`-q:v 4`); upload failure is non-fatal (page renders posterless with the `preload="metadata"` fallback). No backfill for leads merged before this change — they stay posterless until a `step:merge` re-uploads. Local `poster_path` is kept indefinitely as the admin thumbnail.
 6. **Merge with no recording at all.** See the note at the end of §10.1. `Tech.md` §11 distinguishes purged-and-absent from unexpectedly-absent, but not from never-recorded — which is the state the seed creates and which AC-4 walks through. **Decide in Phase 7.**
 7. **`seed_demo_data()` ships in the schema.** A seed function living in a migration is unusual; it is the price of a single source of truth for the seed (§10.1). If migrations ever need to be replayed against a production-like database, this function will be created there too. It is `REVOKE`d from every non-service role, so the exposure is nil, but it is worth remembering that it exists.
