@@ -658,7 +658,7 @@ Final path: `/{campaign-slug}/{lead-slug}` → `https://{site}.netlify.app/acme-
 
 ### 10.2 Page generation
 
-`campaigns.landing_template` with `{{placeholder}}` substitution (`DB.md` §5.1.1). Unknown or missing placeholders render empty — never a literal `{{first_name}}`, and never a failed deploy.
+`campaigns.landing_template` with `{{placeholder}}` substitution (`DB.md` §5.1.1). Placeholder matching is whitespace- and case-tolerant (`{{ first_name }}`, `{{Company}}` → canonical token lookup); unknown or missing placeholders render empty — never a literal `{{first_name}}`, and never a failed deploy.
 
 Requirements the template must satisfy:
 
@@ -703,7 +703,7 @@ Deploys are **serialized** — one in flight at a time, guarded by a Redis lock.
 | 720p web (local) | Local `{batch}/{lead-slug}/web.mp4` | Deleted after upload + deploy |
 | 720p web (remote) | Supabase `lead-videos/{uuid}/final.mp4` | Indefinite |
 | Poster (local) | Local `{batch}/{lead-slug}/poster.jpg` | Indefinite — admin thumbnail |
-| Poster (remote) | Supabase `lead-videos/{uuid}/poster.jpg` | Indefinite — `cacheControl: 3600` (key is reused on self-heal) |
+| Poster (remote) | Supabase `lead-videos/{uuid}/poster.jpg` | Indefinite — `cacheControl: 31536000` (unique-per-encode, same as video) |
 | Intro (normalized) | Local `intros/{id}.mp4` | Indefinite |
 | Debug screenshots | Local `{batch}/{lead-slug}/*.png` | 30 days, kept for `failed` |
 | Landing HTML | PostgreSQL `landing_pages.html` | Indefinite |

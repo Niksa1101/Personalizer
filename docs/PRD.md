@@ -667,28 +667,37 @@ Verified by `npm run verify:merge` (hermetic, env-free, **32 assertions**) and `
 
 **Goal:** generated HTML.
 
-~~Slug generation with collision hashing (`Tech.md` §10.1), template substitution with empty-render for unknown placeholders, mobile-first poster+play markup, `noindex` + `robots.txt`, no third-party requests, HTML and SHA-1 stored.~~ Implemented across `lib/landing-page.ts` (browser-safe substitute → escape → CTA-derive → cleanup → LF-normalize), `lib/landing-template.ts` (revised default template, `{{poster_url}}`, preview poster data URI), `worker/page/generate.ts` + `worker/steps/page.ts` (real page step), `worker/video/merge.ts` + `worker/video/upload.ts` (poster upload beside video), `worker/db.ts` (`loadPageContext`, `upsertLandingPage`, `rename_campaign_slug` RPC), `lib/campaigns.ts` (slug rename path fix), `app/api/landing/[campaignLeadId]/preview/route.ts` + viewer UI (session-guarded preview), `scripts/verify-page.ts`, and `lib/robots-txt.ts`.
+~~Slug generation with collision hashing (`Tech.md` §10.1), template substitution with empty-render for unknown placeholders, mobile-first poster+play markup, `noindex` + `robots.txt`, no third-party requests, HTML and SHA-1 stored.~~ Implemented across `lib/landing-page.ts` (browser-safe substitute → escape → CTA-derive → cleanup → LF-normalize), `lib/landing-template.ts` (revised default template, `{{poster_url}}`, preview poster data URI), `worker/page/generate.ts` + `worker/steps/page.ts` (real page step), `worker/video/merge.ts` + `worker/video/upload.ts` (poster upload beside video), `worker/db.ts` (`loadPageContext`, `upsertLandingPage`, `update_campaign_general` RPC), `lib/campaigns.ts` (slug rename path fix), `app/api/landing/[campaignLeadId]/preview/route.ts` + viewer UI (session-guarded preview), `scripts/verify-page.ts`, `scripts/verify-landing.ts`, and `lib/robots-txt.ts` (deferred to Phase 11 manifest — not served in Phase 10).
 
 **Exit — all seven met (restated; the original "exactly one external request — the video" criterion was wrong once posters ship):**
 
 | Criterion | Verified by |
 |---|---|
-| A generated page renders correctly at 375px and 1920px | `verify:page`, both viewports |
-| Every placeholder substitutes; a missing field renders empty, never a literal `{{token}}` | `lib/landing-page.test.ts` + `verify:page` (no `{{` survives) |
-| Two leads with identical name+city produce different slugs | `verify:import` slug-collision assertion |
+| A generated page renders correctly at 375px and 1920px | `verify:page` — no horizontal overflow at each viewport + `<meta name="robots" content="noindex, nofollow">` present |
+| Every placeholder substitutes; a missing field renders empty, never a literal `{{token}}` | `lib/landing-page.test.ts` + `lib/landing-template.test.ts` (tolerant matching) + `verify:page` (no `{{` survives) |
+| Two leads with identical name+city produce different slugs | `verify:import` slug-collision assertion (exactly one bare slug, one hashed) |
 | Zero third-party requests — every external request goes to the one Supabase origin; the page's own origin serves only the document (a 404 `/favicon.ico` aside) | `verify:page` request interception, counted by origin |
 | No request to the video URL before play | `verify:page`, after load + network idle, then after play |
-| HTML and SHA-1 stored; a regeneration with no content change leaves `content_sha1` and `deploy_status` untouched | `verify:page` SHA-1 stability assertion + `upsertLandingPage` skip-on-match in `worker/db.ts` |
+| HTML and SHA-1 stored; a regeneration with no content change leaves `content_sha1` and `deploy_status` untouched | `verify:landing` no-op upsert leg + `upsertLandingPage` skip-on-match in `worker/db.ts` |
 | `typecheck`, `lint`, `test` clean; `db push` a no-op after migrations | CI / manual |
 
-Verified by `npm run verify:page` (hermetic, **13 assertions**), `npm run verify:import` (slug collision leg), `npm test`, and `npm run verify:merge`.
+Verified by `npm run verify:page` (hermetic, **19 assertions**), `npm run verify:landing` (DB-backed, **10 assertions**), `npm run verify:import` (slug collision leg), `npm test` (**163 tests**), and `npm run verify:merge` (**32 assertions**).
 
 #### Review findings (Phase 10)
 
 1. **`poster_public_url` deviation (D8)** — no separate column; `{{poster_url}}` is derived from `videos.poster_storage_key` at generation time, deliberately diverging from the `web_public_url` precedent to avoid a column that can disagree with its key.
 2. **No poster backfill (D15)** — leads merged before this change render posterless until a `step:merge` re-uploads. Not scripted.
 3. **`safeUrl` allows `data:image/` for preview only (D30)** — strict http/https-only would strip `SAMPLE_POSTER_URL` in the template editor; public pages always use Supabase https URLs.
-4. **Two migrations** — `20260725180000_videos_poster_storage_key.sql` (nullable unique `poster_storage_key`) and `20260725180100_rename_campaign_slug_fn.sql` (`rename_campaign_slug` RPC). Applied; `db push` is a no-op after them.
+4. **Two migrations** — `20260725180000_videos_poster_storage_key.sql` (nullable unique `poster_storage_key`) and `20260725180100_rename_campaign_slug_fn.sql` (`rename_campaign_slug` RPC, superseded by the review migration below). Both applied; `db push` is a no-op after the review migration that follows them.
+
+#### Review findings (Phase 10 review pass, 2026-07-26)
+
+1. **PostgREST embed ambiguity** — `campaign_leads` has two FK paths to both `videos` and `landing_pages`; every embed now names the FK constraint (`videos_campaign_lead_id_fkey`, `landing_pages_campaign_lead_id_fkey`). Without the hint, `loadPageContext`, `getLandingPageForLead`, and `listGeneratedPages` all 500 at runtime despite passing static gates.
+2. **URL placeholder escaping** — `safeUrl` now HTML-escapes every accepted URL before attribute substitution, closing an `href` breakout via operator-controlled `cta_url`.
+3. **Preview sandbox** — `/api/landing/{id}/preview` returns `Content-Security-Policy: sandbox` and `X-Content-Type-Options: nosniff` so direct navigation cannot execute stored HTML with the operator session in scope.
+4. **Tolerant placeholder matching** — `{{ first_name }}`, `{{Company}}`, and other non-canonical spellings now substitute or render empty; recognized tokens only. Pages stored with old literal tokens get a new `content_sha1` on next regeneration.
+5. **Third migration** — `20260726120000_campaign_general_rpc.sql` replaces `rename_campaign_slug` with atomic `update_campaign_general` (name + slug + description + conditional landing path rewrite with deploy-state reset).
+6. **Placeholder presence checks follow the same rule as substitution** — the two "template has no `{{video_url}}`" warnings (the `step:page` log and the template-editor save toast) used a literal `includes("{{video_url}}")`, so tolerant matching (finding 4) would have made them fire on a template that in fact renders the video correctly. All three presence checks now go through one exported `hasPlaceholder()` in `lib/landing-template.ts`.
 
 ---
 

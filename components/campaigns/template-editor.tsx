@@ -21,6 +21,8 @@ import {
 } from "@/components/ui/field"
 import { Textarea } from "@/components/ui/textarea"
 import {
+  DEFAULT_LANDING_TEMPLATE,
+  hasPlaceholder,
   sampleValuesFor,
   TEMPLATE_PLACEHOLDERS,
   type SampleLead,
@@ -71,7 +73,7 @@ export function TemplateEditor({
   }, [pending, state])
 
   const handleSubmit = () => {
-    if (!template.includes("{{video_url}}")) {
+    if (!hasPlaceholder(template, "video_url")) {
       toast.warning(
         "Template has no {{video_url}} placeholder — recipients will not see a video.",
       )
@@ -80,14 +82,16 @@ export function TemplateEditor({
 
   return (
     <form action={formAction} className="space-y-4" onSubmit={handleSubmit}>
-      <Alert>
-        <AlertTitle>Revised default template</AlertTitle>
-        <AlertDescription>
-          New campaigns use an improved default with poster support, larger tap
-          targets, and mobile-first typography. Your stored template is
-          unchanged.
-        </AlertDescription>
-      </Alert>
+      {initialTemplate !== DEFAULT_LANDING_TEMPLATE ? (
+        <Alert>
+          <AlertTitle>Revised default template</AlertTitle>
+          <AlertDescription>
+            New campaigns use an improved default with poster support, larger tap
+            targets, and mobile-first typography. Your stored template is
+            unchanged.
+          </AlertDescription>
+        </Alert>
+      ) : null}
       <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_240px]">
         <Field>
           <FieldLabel htmlFor="landing_template">HTML template</FieldLabel>

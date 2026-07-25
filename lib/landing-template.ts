@@ -160,7 +160,8 @@ export const DEFAULT_LANDING_TEMPLATE = `<!doctype html>
 </body>
 </html>`
 
-const PLACEHOLDER_PATTERN = /\{\{([a-z_]+)\}\}/g
+const PLACEHOLDER_PATTERN = /\{\{\s*([A-Za-z0-9_]+)\s*\}\}/g
+const CANONICAL_PLACEHOLDERS = new Set<string>(TEMPLATE_PLACEHOLDERS)
 
 function stringOrEmpty(value: string | null | undefined): string {
   return value ?? ""
@@ -197,6 +198,21 @@ export function sampleValuesFor(
   return leadToTemplateValues(lead, extras)
 }
 
+/** Does the template reference `token`? Accepts the same whitespace- and
+ *  case-tolerant spellings substituteTemplate resolves, so a presence check
+ *  never disagrees with what actually gets substituted. */
+export function hasPlaceholder(
+  html: string,
+  token: TemplatePlaceholder,
+): boolean {
+  const pattern = new RegExp(PLACEHOLDER_PATTERN.source, "g")
+  let match: RegExpExecArray | null
+  while ((match = pattern.exec(html)) !== null) {
+    if (match[1].trim().toLowerCase() === token) return true
+  }
+  return false
+}
+
 /** Replace {{token}} placeholders. Unknown or missing tokens render empty.
  *  Values are expected to be pre-processed by renderLandingHtml for public output. */
 export function substituteTemplate(
@@ -204,7 +220,9 @@ export function substituteTemplate(
   values: TemplateValues,
 ): string {
   return html.replace(PLACEHOLDER_PATTERN, (_match, token: string) => {
-    const value = values[token as TemplatePlaceholder]
+    const key = token.trim().toLowerCase()
+    if (!CANONICAL_PLACEHOLDERS.has(key)) return ""
+    const value = values[key as TemplatePlaceholder]
     return value ?? ""
   })
 }

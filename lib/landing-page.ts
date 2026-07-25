@@ -33,12 +33,12 @@ export function safeUrl(value: string, options?: { allowContactSchemes?: boolean
   if (!trimmed) return ""
 
   if (HTTP_URL_PATTERN.test(trimmed) || INLINE_IMAGE_PATTERN.test(trimmed)) {
-    return trimmed
+    return escapeHtml(trimmed)
   }
 
   if (options?.allowContactSchemes) {
     if (/^mailto:/i.test(trimmed) || /^tel:/i.test(trimmed)) {
-      return trimmed
+      return escapeHtml(trimmed)
     }
   }
 
@@ -65,6 +65,14 @@ export function deriveCtaHref(
     default:
       return trimmed
   }
+}
+
+/** Derive + allowlist the CTA href for template substitution (D21). */
+export function resolveCtaHref(
+  ctaType: CtaType | string | null | undefined,
+  rawUrl: string,
+): string {
+  return safeUrl(deriveCtaHref(ctaType, rawUrl), { allowContactSchemes: true })
 }
 
 /** Remove anchor tags whose href resolved empty (D23). */
@@ -111,8 +119,7 @@ function prepareValues(
     if (raw === undefined) continue
 
     if (key === "cta_url") {
-      const derived = deriveCtaHref(options?.cta_type, raw)
-      prepared.cta_url = safeUrl(derived, { allowContactSchemes: true })
+      prepared.cta_url = resolveCtaHref(options?.cta_type, raw)
       continue
     }
 

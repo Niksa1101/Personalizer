@@ -21,7 +21,13 @@ export function buildPublicUrl(storageKey: string): string {
 
 /** Derive `{prefix}/poster.jpg` from `{prefix}/final.mp4` (D9). */
 export function derivePosterStorageKey(webStorageKey: string): string {
-  return webStorageKey.replace(/\/final\.mp4$/, "/poster.jpg")
+  const posterKey = webStorageKey.replace(/\/final\.mp4$/, "/poster.jpg")
+  if (posterKey === webStorageKey) {
+    throw new Error(
+      `Cannot derive poster storage key from web storage key: ${webStorageKey}`,
+    )
+  }
+  return posterKey
 }
 
 export async function uploadWebVideo(input: {
@@ -87,7 +93,7 @@ export async function uploadPosterImage(input: {
     .storage.from(BUCKET)
     .upload(posterKey, body, {
       contentType: "image/jpeg",
-      cacheControl: "3600",
+      cacheControl: "31536000",
       upsert: true,
     })
 

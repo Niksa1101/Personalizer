@@ -9,7 +9,7 @@
     "worker": "tsx --conditions react-server --env-file-if-exists=.env.local worker/index.ts",
     "seed": "tsx --env-file-if-exists=.env.local scripts/seed.ts",
     "typecheck": "tsc --noEmit",
-    "test": "node --import tsx --test \"lib/**/*.test.ts\" \"worker/**/*.test.ts\"",
+    "test": "node --import tsx --conditions react-server --test \"lib/**/*.test.ts\" \"worker/**/*.test.ts\"",
     "verify:imports": "tsx scripts/verify-imports.ts",
     "verify:auth": "tsx --env-file-if-exists=.env.local scripts/verify-auth.ts",
     "verify:shell": "tsx --env-file-if-exists=.env.local scripts/verify-shell.ts",
@@ -20,6 +20,7 @@
     "verify:record": "tsx --conditions react-server --env-file-if-exists=.env.local scripts/verify-record.ts",
     "verify:merge": "tsx --conditions react-server scripts/verify-merge.ts",
     "verify:page": "tsx scripts/verify-page.ts",
+    "verify:landing": "tsx --conditions react-server --env-file-if-exists=.env.local scripts/verify-landing.ts",
     "setup:browser": "playwright install chromium",
     "verify:server-only": "tsx scripts/verify-server-only.ts",
     "lint": "eslint"

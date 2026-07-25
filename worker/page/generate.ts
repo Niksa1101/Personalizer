@@ -1,12 +1,11 @@
 import { createHash } from "node:crypto"
 
 import {
-  deriveCtaHref,
   landingPath,
   renderLandingHtml,
-  safeUrl,
+  resolveCtaHref,
 } from "@/lib/landing-page"
-import { leadToTemplateValues } from "@/lib/landing-template"
+import { hasPlaceholder, leadToTemplateValues } from "@/lib/landing-template"
 import { PipelineStepError } from "@/lib/pipeline-types"
 
 import {
@@ -31,9 +30,8 @@ function detectCtaDropped(
   ctaType: string | null,
   rawCtaUrl: string | null,
 ): boolean {
-  if (!template.includes("{{cta_url}}")) return false
-  const derived = deriveCtaHref(ctaType, rawCtaUrl ?? "")
-  return safeUrl(derived, { allowContactSchemes: true }) === ""
+  if (!hasPlaceholder(template, "cta_url")) return false
+  return resolveCtaHref(ctaType, rawCtaUrl ?? "") === ""
 }
 
 export async function runPageGenerate(ctx: StepContext): Promise<PageStepNote> {
@@ -55,7 +53,7 @@ export async function runPageGenerate(ctx: StepContext): Promise<PageStepNote> {
     ? buildPublicUrl(context.video.poster_storage_key)
     : ""
 
-  if (!context.campaign.landing_template.includes("{{video_url}}")) {
+  if (!hasPlaceholder(context.campaign.landing_template, "video_url")) {
     await writeStepLog({
       scope: "deployer",
       level: "warn",
