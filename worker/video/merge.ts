@@ -58,7 +58,7 @@ import {
   writeStepLog,
 } from "../db"
 import type { StepContext } from "../steps/shared"
-import { deleteStorageObject, uploadWebVideo } from "./upload"
+import { deleteStorageObject, uploadPosterImage, uploadWebVideo } from "./upload"
 
 const FFMPEG_PATH = ffmpegPath!
 
@@ -71,6 +71,7 @@ export type MergeStepNote = {
   master_ms: number
   web_ms: number
   poster_ms: number
+  poster_uploaded: boolean
 }
 
 async function pathExists(absPath: string): Promise<boolean> {
@@ -137,8 +138,8 @@ async function ensurePoster(input: {
 
   try {
     await extractPoster(input.masterAbs, input.posterAbs, atSec, {
-      width: 1280,
-      quality: 5,
+      width: 720,
+      quality: 4,
     })
     await moveFile(input.posterAbs, storageAbs(input.posterRel))
 
@@ -342,6 +343,8 @@ export async function runMerge(ctx: StepContext): Promise<MergeStepNote> {
   let stretchFactor = Number(videoRow?.stretch_factor ?? plan.stretchFactor)
   let usedSpeedFloor = videoRow?.used_speed_floor ?? plan.usedSpeedFloor
   let shouldUpload = false
+  let shouldUploadPoster = false
+  let posterUploaded = false
 
   if (action === "full") {
     const recordingAbs = storageAbs(recordingLocalPath)
@@ -408,6 +411,7 @@ export async function runMerge(ctx: StepContext): Promise<MergeStepNote> {
     })
     posterMs = posterResult.durationMs
     posterAttempted = true
+    shouldUploadPoster = posterResult.ok
 
     const videoId = await upsertVideoEncode({
       campaignLeadId: campaignLead.id,
@@ -476,15 +480,59 @@ export async function runMerge(ctx: StepContext): Promise<MergeStepNote> {
       videoRow,
     })
     posterMs = posterResult.durationMs
+    posterAttempted = true
+    shouldUploadPoster = posterResult.ok
   }
 
+  const latestVideoRow = await getVideoForCampaignLead(campaignLead.id)
+  if (
+    !shouldUploadPoster &&
+    latestVideoRow?.uploaded_at &&
+    !latestVideoRow.poster_storage_key
+  ) {
+    const localPoster = latestVideoRow.poster_path ?? posterRel
+    if (localPoster && (await pathExists(storageAbs(localPoster)))) {
+      shouldUploadPoster = true
+    }
+  }
+
+  let videoStorageKey =
+    uploadReservedKey ?? latestVideoRow?.web_storage_key ?? null
+
   if (shouldUpload) {
-    await uploadWebVideo({
+    const uploadResult = await uploadWebVideo({
       campaignLeadId: campaignLead.id,
       webAbsPath: webAbs,
       jobRunId,
       reservedKey: uploadReservedKey,
     })
+    videoStorageKey = uploadResult.storageKey
+  }
+
+  if (shouldUploadPoster) {
+    const localPoster = latestVideoRow?.poster_path ?? posterRel
+    if (localPoster && (await pathExists(storageAbs(localPoster)))) {
+      try {
+        await uploadPosterImage({
+          campaignLeadId: campaignLead.id,
+          posterAbsPath: storageAbs(localPoster),
+          jobRunId,
+          webStorageKey: videoStorageKey,
+        })
+        posterUploaded = true
+      } catch (error) {
+        await writeStepLog({
+          scope: "merger",
+          level: "warn",
+          message: "Poster upload failed — continuing without remote poster.",
+          campaignLeadId: campaignLead.id,
+          jobRunId,
+          meta: {
+            error: error instanceof Error ? error.message : String(error),
+          },
+        })
+      }
+    }
   }
 
   return {
@@ -496,5 +544,6 @@ export async function runMerge(ctx: StepContext): Promise<MergeStepNote> {
     master_ms: masterMs,
     web_ms: webMs,
     poster_ms: posterMs,
+    poster_uploaded: posterUploaded,
   }
 }

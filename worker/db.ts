@@ -1,4 +1,5 @@
 import type { Database } from "@/lib/database.types"
+import type { SampleLead } from "@/lib/landing-template"
 import type {
   ErrorCode,
   EventKind,
@@ -9,6 +10,7 @@ import { getSupabaseAdmin } from "@/lib/supabase"
 
 type CampaignLeadRow = Database["public"]["Tables"]["campaign_leads"]["Row"]
 type JobRunRow = Database["public"]["Tables"]["job_runs"]["Row"]
+type LandingPageRow = Database["public"]["Tables"]["landing_pages"]["Row"]
 type VideoRow = Database["public"]["Tables"]["videos"]["Row"]
 
 export type LeadContext = {
@@ -46,6 +48,23 @@ export type LeadBase = {
 }
 
 export type RecorderContext = LeadContext
+
+export type PageContext = {
+  campaignLead: Pick<CampaignLeadRow, "id" | "slug" | "landing_page_id">
+  campaign: {
+    slug: string
+    landing_template: string
+    cta_type: string | null
+    cta_label: string | null
+    cta_url: string | null
+  }
+  lead: SampleLead
+  video: Pick<VideoRow, "web_public_url" | "poster_storage_key"> | null
+  existingLandingPage: Pick<
+    LandingPageRow,
+    "id" | "content_sha1" | "deploy_status" | "path" | "unpublished_at"
+  > | null
+}
 
 export type UsableRecording = {
   id: string
@@ -775,6 +794,7 @@ export async function upsertVideoEncode(input: {
         web_storage_key: null,
         web_public_url: null,
         uploaded_at: null,
+        poster_storage_key: null,
       },
       { onConflict: "campaign_lead_id" },
     )
@@ -864,6 +884,25 @@ export async function updateVideoUpload(input: {
   )
 }
 
+export async function updateVideoPosterUpload(input: {
+  campaignLeadId: string
+  posterStorageKey: string
+}): Promise<void> {
+  const { data, error } = await getSupabaseAdmin()
+    .from("videos")
+    .update({ poster_storage_key: input.posterStorageKey })
+    .eq("campaign_lead_id", input.campaignLeadId)
+    .select("id")
+    .maybeSingle()
+
+  assertVideoRowTouched(
+    data,
+    error,
+    "update video poster upload",
+    input.campaignLeadId,
+  )
+}
+
 export async function updateVideoWebEncode(input: {
   campaignLeadId: string
   webPath: string
@@ -923,4 +962,205 @@ export async function discardMergeArtifacts(
   }
 
   return { oldStorageKey: video.web_storage_key, paths }
+}
+
+function assertLandingPageRowTouched(
+  data: { id: string } | null,
+  error: { message: string } | null,
+  what: string,
+  landingPageId: string,
+): void {
+  if (error) {
+    throw new Error(`Failed to ${what}: ${error.message}`)
+  }
+  if (!data) {
+    throw new Error(`Failed to ${what}: no landing page row ${landingPageId}`)
+  }
+}
+
+export async function loadPageContext(
+  campaignLeadId: string,
+): Promise<PageContext | null> {
+  const { data, error } = await getSupabaseAdmin()
+    .from("campaign_leads")
+    .select(
+      `
+      id,
+      slug,
+      landing_page_id,
+      campaigns!inner (
+        slug,
+        landing_template,
+        cta_type,
+        cta_label,
+        cta_url
+      ),
+      leads!inner (
+        id,
+        ref,
+        first_name,
+        last_name,
+        full_name,
+        company,
+        email,
+        phone,
+        website_url,
+        city,
+        state,
+        country,
+        industry,
+        updated_at
+      ),
+      videos (
+        web_public_url,
+        poster_storage_key
+      ),
+      landing_pages (
+        id,
+        content_sha1,
+        deploy_status,
+        path,
+        unpublished_at
+      )
+    `,
+    )
+    .eq("id", campaignLeadId)
+    .maybeSingle()
+
+  if (error) {
+    throw new Error(`Failed to load page context: ${error.message}`)
+  }
+  if (!data) return null
+
+  const campaign = data.campaigns as PageContext["campaign"]
+  const lead = data.leads as SampleLead
+  const videos = data.videos as
+    | Pick<VideoRow, "web_public_url" | "poster_storage_key">
+    | Pick<VideoRow, "web_public_url" | "poster_storage_key">[]
+    | null
+  const landingPages = data.landing_pages as
+    | PageContext["existingLandingPage"]
+    | PageContext["existingLandingPage"][]
+    | null
+
+  const video = Array.isArray(videos) ? (videos[0] ?? null) : videos
+  const existingLandingPage = Array.isArray(landingPages)
+    ? (landingPages[0] ?? null)
+    : landingPages
+
+  return {
+    campaignLead: {
+      id: data.id,
+      slug: data.slug,
+      landing_page_id: data.landing_page_id,
+    },
+    campaign,
+    lead,
+    video,
+    existingLandingPage,
+  }
+}
+
+export async function upsertLandingPage(input: {
+  campaignLeadId: string
+  path: string
+  html: string
+  contentSha1: string
+  existing: PageContext["existingLandingPage"]
+}): Promise<{ id: string; sha1Changed: boolean }> {
+  const { data: conflict, error: conflictError } = await getSupabaseAdmin()
+    .from("landing_pages")
+    .select("id, campaign_lead_id")
+    .eq("path", input.path)
+    .neq("campaign_lead_id", input.campaignLeadId)
+    .maybeSingle()
+
+  if (conflictError) {
+    throw new Error(`Failed to check landing path collision: ${conflictError.message}`)
+  }
+  if (conflict) {
+    throw new Error(
+      `Landing path ${input.path} is already used by campaign lead ${conflict.campaign_lead_id}.`,
+    )
+  }
+
+  if (input.existing) {
+    const sha1Changed = input.existing.content_sha1 !== input.contentSha1
+
+    if (!sha1Changed) {
+      if (input.existing.path !== input.path) {
+        const { data, error } = await getSupabaseAdmin()
+          .from("landing_pages")
+          .update({ path: input.path })
+          .eq("id", input.existing.id)
+          .select("id")
+          .maybeSingle()
+
+        assertLandingPageRowTouched(
+          data,
+          error,
+          "update landing page path",
+          input.existing.id,
+        )
+      }
+      return { id: input.existing.id, sha1Changed: false }
+    }
+
+    const { data, error } = await getSupabaseAdmin()
+      .from("landing_pages")
+      .update({
+        path: input.path,
+        html: input.html,
+        content_sha1: input.contentSha1,
+      })
+      .eq("id", input.existing.id)
+      .select("id")
+      .maybeSingle()
+
+    assertLandingPageRowTouched(
+      data,
+      error,
+      "update landing page",
+      input.existing.id,
+    )
+    return { id: input.existing.id, sha1Changed: true }
+  }
+
+  const { data, error } = await getSupabaseAdmin()
+    .from("landing_pages")
+    .insert({
+      campaign_lead_id: input.campaignLeadId,
+      path: input.path,
+      html: input.html,
+      content_sha1: input.contentSha1,
+    })
+    .select("id")
+    .single()
+
+  if (error) {
+    throw new Error(`Failed to insert landing page: ${error.message}`)
+  }
+
+  return { id: data.id, sha1Changed: true }
+}
+
+export async function linkLandingPageToCampaignLead(
+  campaignLeadId: string,
+  landingPageId: string,
+): Promise<void> {
+  const { data, error } = await getSupabaseAdmin()
+    .from("campaign_leads")
+    .update({ landing_page_id: landingPageId })
+    .eq("id", campaignLeadId)
+    .select("id")
+    .maybeSingle()
+
+  if (error) {
+    throw new Error(`Failed to link landing page: ${error.message}`)
+  }
+  if (!data) {
+    throw new Error(
+      `Failed to link landing page: no campaign lead ${campaignLeadId}`,
+    )
+  }
 }
