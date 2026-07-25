@@ -1,0 +1,28 @@
+# Line endings.
+#
+# This is a Windows project, so `core.autocrlf=true` is the local default. With
+# no attributes file, Git's idea of a file's line endings and the working tree's
+# could drift apart, and untouched files kept showing up as modified in
+# `git status` while `git diff` showed nothing — phantom changes that added
+# whitespace-only noise to every commit.
+#
+# `text=auto eol=lf` normalizes to LF in the repository *and* checks out LF on
+# every platform, so the working tree matches what is stored regardless of each
+# machine's autocrlf setting. Nothing here needs CRLF: there are no .bat or
+# .cmd files, and Windows tooling reads LF fine.
+* text=auto eol=lf
+
+# Binary — never apply line-ending conversion or attempt a text diff.
+*.ico binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.mp4 binary
+*.webm binary
+*.mov binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.otf binary
