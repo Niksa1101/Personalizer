@@ -383,7 +383,7 @@ Also verified by a 16-case suite run inside a self-aborting transaction: both `U
 1. The drafted `SELECT` policy on `storage.objects` was **removed**. It did not enable public playback (a public bucket serves its object route without consulting RLS); its only effect was to authorize bucket *listing*, making every prospect's video URL enumerable by the anon key — which is the key §7.3 deliberately ships to GitHub. Measured both ways before removing.
 2. The seed ships as one idempotent SQL function with two thin callers, so `supabase db reset` and `npm run seed` cannot drift.
 
-**Three open items were raised and deferred to the phases that can actually decide them** (`DB.md` §11 items 5–7): no public poster frame (Phase 10), merge-with-no-recording (Phase 7), and the seed function living in the schema.
+**Three open items were raised and deferred to the phases that can actually decide them** (`DB.md` §11 items 5–7): ~~no public poster frame (Phase 10)~~ **resolved in Phase 10**, merge-with-no-recording (Phase 7), and the seed function living in the schema.
 
 ---
 
@@ -663,13 +663,32 @@ Verified by `npm run verify:merge` (hermetic, env-free, **32 assertions**) and `
 
 ---
 
-#### Phase 10 — Landing pages
+#### Phase 10 — Landing pages ✅ **DONE** (2026-07-25)
 
 **Goal:** generated HTML.
 
-Slug generation with collision hashing (`Tech.md` §10.1), template substitution with empty-render for unknown placeholders, mobile-first poster+play markup, `noindex` + `robots.txt`, no third-party requests, HTML and SHA-1 stored.
+~~Slug generation with collision hashing (`Tech.md` §10.1), template substitution with empty-render for unknown placeholders, mobile-first poster+play markup, `noindex` + `robots.txt`, no third-party requests, HTML and SHA-1 stored.~~ Implemented across `lib/landing-page.ts` (browser-safe substitute → escape → CTA-derive → cleanup → LF-normalize), `lib/landing-template.ts` (revised default template, `{{poster_url}}`, preview poster data URI), `worker/page/generate.ts` + `worker/steps/page.ts` (real page step), `worker/video/merge.ts` + `worker/video/upload.ts` (poster upload beside video), `worker/db.ts` (`loadPageContext`, `upsertLandingPage`, `rename_campaign_slug` RPC), `lib/campaigns.ts` (slug rename path fix), `app/api/landing/[campaignLeadId]/preview/route.ts` + viewer UI (session-guarded preview), `scripts/verify-page.ts`, and `lib/robots-txt.ts`.
 
-**Exit:** a generated page renders correctly at 375px and 1920px. Every placeholder substitutes; a missing field renders empty, never a literal `{{token}}`. Two leads with identical name+city produce different slugs. The page makes exactly one external request — the video.
+**Exit — all seven met (restated; the original "exactly one external request — the video" criterion was wrong once posters ship):**
+
+| Criterion | Verified by |
+|---|---|
+| A generated page renders correctly at 375px and 1920px | `verify:page`, both viewports |
+| Every placeholder substitutes; a missing field renders empty, never a literal `{{token}}` | `lib/landing-page.test.ts` + `verify:page` (no `{{` survives) |
+| Two leads with identical name+city produce different slugs | `verify:import` slug-collision assertion |
+| Zero third-party requests — every external request goes to the one Supabase origin; the page's own origin serves only the document (a 404 `/favicon.ico` aside) | `verify:page` request interception, counted by origin |
+| No request to the video URL before play | `verify:page`, after load + network idle, then after play |
+| HTML and SHA-1 stored; a regeneration with no content change leaves `content_sha1` and `deploy_status` untouched | `verify:page` SHA-1 stability assertion + `upsertLandingPage` skip-on-match in `worker/db.ts` |
+| `typecheck`, `lint`, `test` clean; `db push` a no-op after migrations | CI / manual |
+
+Verified by `npm run verify:page` (hermetic, **13 assertions**), `npm run verify:import` (slug collision leg), `npm test`, and `npm run verify:merge`.
+
+#### Review findings (Phase 10)
+
+1. **`poster_public_url` deviation (D8)** — no separate column; `{{poster_url}}` is derived from `videos.poster_storage_key` at generation time, deliberately diverging from the `web_public_url` precedent to avoid a column that can disagree with its key.
+2. **No poster backfill (D15)** — leads merged before this change render posterless until a `step:merge` re-uploads. Not scripted.
+3. **`safeUrl` allows `data:image/` for preview only (D30)** — strict http/https-only would strip `SAMPLE_POSTER_URL` in the template editor; public pages always use Supabase https URLs.
+4. **Two migrations** — `20260725180000_videos_poster_storage_key.sql` (nullable unique `poster_storage_key`) and `20260725180100_rename_campaign_slug_fn.sql` (`rename_campaign_slug` RPC). Applied; `db push` is a no-op after them.
 
 ---
 
