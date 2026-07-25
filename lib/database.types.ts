@@ -683,10 +683,12 @@ export type Database = {
         }
         Returns: Json
       }
-      rename_campaign_slug: {
+      update_campaign_general: {
         Args: {
           p_campaign_id: string
+          p_name: string
           p_slug: string
+          p_description: string | null
         }
         Returns: undefined
       }

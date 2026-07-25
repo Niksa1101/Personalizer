@@ -39,6 +39,17 @@ describe("safeUrl", () => {
     assert.equal(safeUrl("ftp://example.com"), "")
   })
 
+  it("escapes quotes and angle brackets in accepted URLs", () => {
+    assert.equal(
+      safeUrl('https://e.com/x" onmouseover="alert(document.cookie)'),
+      "https://e.com/x&quot; onmouseover=&quot;alert(document.cookie)",
+    )
+    assert.equal(
+      safeUrl("https://x.com/a<script>alert(1)</script>"),
+      "https://x.com/a&lt;script&gt;alert(1)&lt;/script&gt;",
+    )
+  })
+
   it("allows mailto and tel for CTA when enabled", () => {
     assert.equal(
       safeUrl("mailto:a@b.com", { allowContactSchemes: true }),
@@ -129,6 +140,28 @@ describe("renderLandingHtml", () => {
     )
     assert.ok(!html.includes("<a"))
     assert.ok(!html.includes("javascript:"))
+  })
+
+  it("escapes malicious characters in URL placeholders", () => {
+    const html = renderLandingHtml(
+      '<a class="cta" href="{{cta_url}}">Book</a><p>{{website_url}}</p><video poster="{{poster_url}}"></video>',
+      {
+        cta_url: 'https://e.com/x" onmouseover="alert(document.cookie)',
+        cta_label: "Book",
+        website_url: "https://x.com/a<script>alert(1)</script>",
+        poster_url: 'https://s.co/p.jpg" onerror="alert(1)"',
+      },
+      { cta_type: "custom" },
+    )
+    assert.match(
+      html,
+      /href="https:\/\/e\.com\/x&quot; onmouseover=&quot;alert\(document\.cookie\)"/,
+    )
+    assert.match(html, /https:\/\/x\.com\/a&lt;script&gt;alert\(1\)&lt;\/script&gt;/)
+    assert.match(
+      html,
+      /poster="https:\/\/s\.co\/p\.jpg&quot; onerror=&quot;alert\(1\)&quot;"/,
+    )
   })
 
   it("derives mailto CTA from email type", () => {

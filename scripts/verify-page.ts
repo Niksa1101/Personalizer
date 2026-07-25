@@ -288,10 +288,35 @@ function runStaticChecks(html: string, videoUrl: string, posterUrl: string): voi
     ),
   )
 
-  if (changed === first) {
+    if (changed === first) {
     fail("sha1 changes when content changes", "digest unchanged")
   } else {
     pass("sha1 changes when content changes")
+  }
+}
+
+function runPosterFallbackCheck(videoUrl: string): void {
+  const html = renderLandingHtml(
+    DEFAULT_LANDING_TEMPLATE,
+    sampleValuesFor(SAMPLE_LEAD, {
+      video_url: videoUrl,
+      poster_url: "",
+      cta_url: "https://example.com/book",
+      cta_label: "Book a call",
+    }),
+    { cta_type: "website" },
+  )
+
+  if (html.includes('poster=""')) {
+    fail("poster fallback strips empty poster", 'found poster=""')
+  } else {
+    pass("poster fallback strips empty poster")
+  }
+
+  if (!html.includes('preload="metadata"')) {
+    fail("poster fallback downgrades preload", 'missing preload="metadata"')
+  } else {
+    pass("poster fallback downgrades preload")
   }
 }
 
@@ -319,6 +344,28 @@ async function exerciseViewport(
       fail(`${viewport.label} renders company`, "company text missing")
     } else {
       pass(`${viewport.label} renders company`)
+    }
+
+    const noHorizontalOverflow = await page.evaluate(
+      () => document.documentElement.scrollWidth <= window.innerWidth,
+    )
+    if (!noHorizontalOverflow) {
+      fail(
+        `${viewport.label} no horizontal overflow`,
+        `scrollWidth=${await page.evaluate(() => document.documentElement.scrollWidth)} innerWidth=${await page.evaluate(() => window.innerWidth)}`,
+      )
+    } else {
+      pass(`${viewport.label} no horizontal overflow`)
+    }
+
+    const hasNoindex = await page.evaluate(() => {
+      const meta = document.querySelector('meta[name="robots"]')
+      return meta?.getAttribute("content")?.includes("noindex") ?? false
+    })
+    if (!hasNoindex) {
+      fail(`${viewport.label} robots noindex meta`, "missing noindex")
+    } else {
+      pass(`${viewport.label} robots noindex meta`)
     }
 
     await page.locator("video").waitFor({ state: "visible" })
@@ -371,11 +418,6 @@ async function exerciseViewport(
     } else {
       pass(`${viewport.label} third-party requests`, `${requests.length} total`)
     }
-
-    const favicon404 = requests.some((url) => url.includes("/favicon.ico"))
-    if (favicon404) {
-      pass(`${viewport.label} favicon 404 tolerated`)
-    }
   } finally {
     await context.close()
   }
@@ -402,6 +444,7 @@ async function main(): Promise<void> {
     })
 
     runStaticChecks(servers.html, values.video_url!, values.poster_url!)
+    runPosterFallbackCheck(values.video_url!)
 
     browser = await chromium.launch({
       headless: true,

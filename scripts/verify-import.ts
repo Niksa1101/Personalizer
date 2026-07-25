@@ -348,8 +348,23 @@ async function main(): Promise<void> {
       )
     } else {
       const slugs = slugRows!.map((row) => row.slug)
-      if (slugs[0] === slugs[1]) {
-        fail("identical name+city slugs differ", `both are ${slugs[0]}`)
+      const bare = "acme-plumbing-portland"
+      const bareCount = slugs.filter((slug) => slug === bare).length
+      const hashed = slugs.filter((slug) => slug !== bare)
+
+      if (bareCount !== 1) {
+        fail(
+          "slug collision bare slug",
+          `expected exactly one ${bare}, got ${bareCount}: ${slugs.join(", ")}`,
+        )
+      } else if (
+        hashed.length !== 1 ||
+        !/^acme-plumbing-portland-[0-9a-f]{6}$/.test(hashed[0] ?? "")
+      ) {
+        fail(
+          "slug collision hashed slug",
+          `expected one hashed slug, got ${hashed.join(", ")}`,
+        )
       } else if (!slugs.every((slug) => SLUG_REGEX.test(slug))) {
         fail("slug regex", slugs.join(", "))
       } else {

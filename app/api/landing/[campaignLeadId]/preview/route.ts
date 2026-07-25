@@ -26,6 +26,8 @@ export async function GET(_request: Request, context: RouteContext) {
     headers: {
       "Content-Type": "text/html; charset=utf-8",
       "Cache-Control": "no-store",
+      "Content-Security-Policy": "sandbox",
+      "X-Content-Type-Options": "nosniff",
     },
   })
 }

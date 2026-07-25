@@ -1011,11 +1011,11 @@ export async function loadPageContext(
         industry,
         updated_at
       ),
-      videos (
+      videos!videos_campaign_lead_id_fkey (
         web_public_url,
         poster_storage_key
       ),
-      landing_pages (
+      landing_pages!landing_pages_campaign_lead_id_fkey (
         id,
         content_sha1,
         deploy_status,
@@ -1034,19 +1034,11 @@ export async function loadPageContext(
 
   const campaign = data.campaigns as PageContext["campaign"]
   const lead = data.leads as SampleLead
-  const videos = data.videos as
-    | Pick<VideoRow, "web_public_url" | "poster_storage_key">
-    | Pick<VideoRow, "web_public_url" | "poster_storage_key">[]
-    | null
-  const landingPages = data.landing_pages as
-    | PageContext["existingLandingPage"]
-    | PageContext["existingLandingPage"][]
-    | null
-
-  const video = Array.isArray(videos) ? (videos[0] ?? null) : videos
-  const existingLandingPage = Array.isArray(landingPages)
-    ? (landingPages[0] ?? null)
-    : landingPages
+  const video = data.videos as Pick<
+    VideoRow,
+    "web_public_url" | "poster_storage_key"
+  > | null
+  const existingLandingPage = data.landing_pages as PageContext["existingLandingPage"]
 
   return {
     campaignLead: {
@@ -1068,41 +1060,38 @@ export async function upsertLandingPage(input: {
   contentSha1: string
   existing: PageContext["existingLandingPage"]
 }): Promise<{ id: string; sha1Changed: boolean }> {
-  const { data: conflict, error: conflictError } = await getSupabaseAdmin()
-    .from("landing_pages")
-    .select("id, campaign_lead_id")
-    .eq("path", input.path)
-    .neq("campaign_lead_id", input.campaignLeadId)
-    .maybeSingle()
-
-  if (conflictError) {
-    throw new Error(`Failed to check landing path collision: ${conflictError.message}`)
-  }
-  if (conflict) {
-    throw new Error(
-      `Landing path ${input.path} is already used by campaign lead ${conflict.campaign_lead_id}.`,
-    )
-  }
-
   if (input.existing) {
     const sha1Changed = input.existing.content_sha1 !== input.contentSha1
+    const pathChanged = input.existing.path !== input.path
+
+    if (!sha1Changed && !pathChanged) {
+      return { id: input.existing.id, sha1Changed: false }
+    }
 
     if (!sha1Changed) {
-      if (input.existing.path !== input.path) {
-        const { data, error } = await getSupabaseAdmin()
-          .from("landing_pages")
-          .update({ path: input.path })
-          .eq("id", input.existing.id)
-          .select("id")
-          .maybeSingle()
+      const { data, error } = await getSupabaseAdmin()
+        .from("landing_pages")
+        .update({
+          path: input.path,
+          deploy_status: "pending",
+          unpublished_at: null,
+        })
+        .eq("id", input.existing.id)
+        .select("id")
+        .maybeSingle()
 
-        assertLandingPageRowTouched(
-          data,
-          error,
-          "update landing page path",
-          input.existing.id,
+      if (error?.code === "23505") {
+        throw new Error(
+          `Landing path ${input.path} is already used by another campaign lead.`,
         )
       }
+
+      assertLandingPageRowTouched(
+        data,
+        error,
+        "update landing page path",
+        input.existing.id,
+      )
       return { id: input.existing.id, sha1Changed: false }
     }
 
@@ -1112,10 +1101,18 @@ export async function upsertLandingPage(input: {
         path: input.path,
         html: input.html,
         content_sha1: input.contentSha1,
+        deploy_status: "pending",
+        unpublished_at: null,
       })
       .eq("id", input.existing.id)
       .select("id")
       .maybeSingle()
+
+    if (error?.code === "23505") {
+      throw new Error(
+        `Landing path ${input.path} is already used by another campaign lead.`,
+      )
+    }
 
     assertLandingPageRowTouched(
       data,
@@ -1138,6 +1135,11 @@ export async function upsertLandingPage(input: {
     .single()
 
   if (error) {
+    if (error.code === "23505") {
+      throw new Error(
+        `Landing path ${input.path} is already used by another campaign lead.`,
+      )
+    }
     throw new Error(`Failed to insert landing page: ${error.message}`)
   }
 

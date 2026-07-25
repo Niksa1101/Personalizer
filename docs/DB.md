@@ -566,6 +566,8 @@ SHA-1 is not a security choice — it is the algorithm Netlify's digest API requ
 
 The deploy sends a **full manifest** every time; Netlify responds with only the digests it lacks and we upload just those. `content_sha1` therefore governs whether a given page is re-uploaded at all.
 
+When regenerated HTML differs (`content_sha1` changes) or the site-relative `path` changes (slug rename), `deploy_status` resets to `'pending'` and `unpublished_at` clears — a previously `live` page must redeploy before Netlify serves the new bytes. A regeneration where both `content_sha1` and `path` are unchanged touches nothing (including `deploy_status`).
+
 ---
 
 ### 5.9 `job_runs`
@@ -905,6 +907,13 @@ supabase/
 
     -- Added in Phase 9 (PRD.md §11):
     20260725120000_encode_merge_timeout_setting.sql -- §5.12 — encode.merge_timeout_ms
+
+    -- Added in Phase 10 (PRD.md §11):
+    20260725180000_videos_poster_storage_key.sql   -- §5.7 — videos.poster_storage_key
+    20260725180100_rename_campaign_slug_fn.sql       -- superseded by review migration below
+
+    -- Added after the Phase 10 review (PRD.md §11):
+    20260726120000_campaign_general_rpc.sql        -- update_campaign_general() RPC
   seed.sql                               -- one line: SELECT public.seed_demo_data();
 ```
 

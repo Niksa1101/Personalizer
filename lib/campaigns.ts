@@ -216,41 +216,28 @@ export async function updateCampaignGeneral(
     throw new Error("Slug is already in use")
   }
 
-  if (slugChanged && !locked) {
-    const { error: rpcError } = await getSupabaseAdmin().rpc(
-      "rename_campaign_slug",
-      {
-        p_campaign_id: id,
-        p_slug: input.slug,
-      },
-    )
+  const { error: rpcError } = await getSupabaseAdmin().rpc(
+    "update_campaign_general",
+    {
+      p_campaign_id: id,
+      p_name: input.name,
+      p_slug: input.slug,
+      p_description: input.description ?? null,
+    },
+  )
 
-    if (rpcError) {
-      if (rpcError.code === "23505") {
-        throw new Error("Slug is already in use")
-      }
-      throw new Error(`Failed to rename campaign slug: ${rpcError.message}`)
-    }
-  }
-
-  const { data, error } = await getSupabaseAdmin()
-    .from("campaigns")
-    .update({
-      name: input.name,
-      ...(slugChanged ? {} : { slug: input.slug }),
-      description: input.description ?? null,
-    })
-    .eq("id", id)
-    .select("*")
-    .single()
-
-  if (error) {
-    if (error.code === "23505") {
+  if (rpcError) {
+    if (rpcError.code === "23505") {
       throw new Error("Slug is already in use")
     }
-    throw new Error(`Failed to update campaign: ${error.message}`)
+    throw new Error(`Failed to update campaign: ${rpcError.message}`)
   }
-  return data
+
+  const updated = await getCampaign(id)
+  if (!updated) {
+    throw new Error("Campaign not found")
+  }
+  return updated
 }
 
 export async function updateCampaignMerge(
@@ -397,33 +384,37 @@ export async function listGeneratedPages(
   limit = 10,
 ): Promise<{ pages: GeneratedPageListItem[]; totalCount: number }> {
   const { count, error: countError } = await getSupabaseAdmin()
-    .from("campaign_leads")
-    .select("id, landing_pages!inner(id)", { count: "exact", head: true })
-    .eq("campaign_id", campaignId)
+    .from("landing_pages")
+    .select(
+      "id, campaign_leads!landing_pages_campaign_lead_id_fkey!inner(id)",
+      { count: "exact", head: true },
+    )
+    .eq("campaign_leads.campaign_id", campaignId)
 
   if (countError) {
     throw new Error(`Failed to count generated pages: ${countError.message}`)
   }
 
   const { data, error } = await getSupabaseAdmin()
-    .from("campaign_leads")
+    .from("landing_pages")
     .select(
       `
-      id,
-      landing_pages!inner (
-        path,
-        updated_at
-      ),
-      leads (
-        ref,
-        full_name,
-        first_name,
-        last_name
+      path,
+      updated_at,
+      campaign_leads!landing_pages_campaign_lead_id_fkey!inner(
+        id,
+        campaign_id,
+        leads(
+          ref,
+          full_name,
+          first_name,
+          last_name
+        )
       )
     `,
     )
-    .eq("campaign_id", campaignId)
-    .order("updated_at", { referencedTable: "landing_pages", ascending: false })
+    .eq("campaign_leads.campaign_id", campaignId)
+    .order("updated_at", { ascending: false })
     .limit(limit)
 
   if (error) {
@@ -431,28 +422,26 @@ export async function listGeneratedPages(
   }
 
   const pages: GeneratedPageListItem[] = (data ?? []).map((row) => {
-    const landingPages = row.landing_pages as
-      | { path: string; updated_at: string }
-      | { path: string; updated_at: string }[]
-    const landingPage = Array.isArray(landingPages)
-      ? landingPages[0]
-      : landingPages
-    const lead = row.leads as {
-      ref: string
-      full_name: string | null
-      first_name: string | null
-      last_name: string | null
-    } | null
+    const campaignLead = row.campaign_leads as {
+      id: string
+      leads: {
+        ref: string
+        full_name: string | null
+        first_name: string | null
+        last_name: string | null
+      } | null
+    }
+    const lead = campaignLead.leads
+    const leadName =
+      lead?.full_name ??
+      [lead?.first_name, lead?.last_name].filter(Boolean).join(" ")
 
     return {
-      campaignLeadId: row.id,
+      campaignLeadId: campaignLead.id,
       leadRef: lead?.ref ?? "—",
-      leadName:
-        lead?.full_name ??
-        ([lead?.first_name, lead?.last_name].filter(Boolean).join(" ") ||
-          null),
-      path: landingPage.path,
-      updatedAt: landingPage.updated_at,
+      leadName: leadName || null,
+      path: row.path,
+      updatedAt: row.updated_at,
     }
   })
 
@@ -467,7 +456,7 @@ export async function getLandingPageForLead(
     .select(
       `
       campaign_id,
-      landing_pages (
+      landing_pages!landing_pages_campaign_lead_id_fkey (
         html,
         path
       )
@@ -480,13 +469,9 @@ export async function getLandingPageForLead(
     throw new Error(`Failed to load landing page: ${error.message}`)
   }
 
-  const landingPages = data?.landing_pages as
+  const landingPage = data?.landing_pages as
     | { html: string | null; path: string }
-    | { html: string | null; path: string }[]
     | null
-  const landingPage = Array.isArray(landingPages)
-    ? (landingPages[0] ?? null)
-    : landingPages
 
   if (!data || !landingPage?.html) {
     return null

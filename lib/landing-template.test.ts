@@ -4,6 +4,7 @@ import { describe, it } from "node:test"
 import { renderLandingHtml } from "./landing-page"
 import {
   DEFAULT_LANDING_TEMPLATE,
+  hasPlaceholder,
   SAMPLE_LEAD,
   SAMPLE_POSTER_URL,
   SAMPLE_VIDEO_URL,
@@ -44,6 +45,19 @@ describe("substituteTemplate", () => {
     assert.equal(result, "Hello  world")
   })
 
+  it("matches placeholders with surrounding whitespace and mixed case", () => {
+    const result = substituteTemplate(
+      "{{ first_name }} {{Company}} {{FIRST_NAME}}",
+      values,
+    )
+    assert.equal(result, "Alex Acme Plumbing Alex")
+  })
+
+  it("renders non-canonical spellings empty", () => {
+    const result = substituteTemplate("{{firstName}}", values)
+    assert.equal(result, "")
+  })
+
   it("renders missing values as empty string, never literal tokens", () => {
     const sparse = sampleValuesFor({
       ...SAMPLE_LEAD,
@@ -58,6 +72,30 @@ describe("substituteTemplate", () => {
 
     assert.equal(result, "    Acme Plumbing")
     assert.ok(!result.includes("{{"))
+  })
+})
+
+describe("hasPlaceholder", () => {
+  it("accepts the same spellings substituteTemplate resolves", () => {
+    for (const template of [
+      "<source src={{video_url}}>",
+      "<source src={{ video_url }}>",
+      "<source src={{VIDEO_URL}}>",
+      "<source src={{ Video_Url }}>",
+    ]) {
+      assert.ok(hasPlaceholder(template, "video_url"), template)
+      assert.ok(!substituteTemplate(template, { video_url: "x" }).includes("{{"))
+    }
+  })
+
+  it("does not match a different or non-canonical token", () => {
+    assert.ok(!hasPlaceholder("{{poster_url}}", "video_url"))
+    assert.ok(!hasPlaceholder("{{videoUrl}}", "video_url"))
+    assert.ok(!hasPlaceholder("no placeholders here", "video_url"))
+  })
+
+  it("finds a token that is not the first placeholder in the template", () => {
+    assert.ok(hasPlaceholder("{{company}} {{city}} {{ cta_url }}", "cta_url"))
   })
 })
 
