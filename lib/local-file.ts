@@ -163,6 +163,53 @@ export async function sweepStaleImportUploadTemps(
 }
 
 const REC_TMP_PREFIX = "rec-"
+const MERGE_TEMP_PATTERN =
+  /^(?:final|web)\..+\.tmp\.mp4$|^poster\..+\.tmp\.jpg$/
+
+/** Remove orphaned merge temps left by a crash mid-encode. */
+export async function sweepStaleMergeTemps(
+  outputDirAbs: string,
+  maxAgeMs = 10 * 60 * 1000,
+): Promise<void> {
+  let entries: string[]
+  try {
+    entries = await readdir(outputDirAbs)
+  } catch (error) {
+    if (
+      error instanceof Error &&
+      "code" in error &&
+      (error as NodeJS.ErrnoException).code === "ENOENT"
+    ) {
+      return
+    }
+    throw error
+  }
+
+  const cutoff = Date.now() - maxAgeMs
+  await Promise.all(
+    entries
+      .filter((name) => MERGE_TEMP_PATTERN.test(name))
+      .map(async (name) => {
+        const filePath = path.join(outputDirAbs, name)
+        let fileStat
+        try {
+          fileStat = await stat(filePath)
+        } catch (error) {
+          if (
+            error instanceof Error &&
+            "code" in error &&
+            (error as NodeJS.ErrnoException).code === "ENOENT"
+          ) {
+            return
+          }
+          throw error
+        }
+        if (fileStat.mtimeMs < cutoff) {
+          await removeIfExists(filePath)
+        }
+      }),
+  )
+}
 
 /** Remove orphaned recorder temps left by a crash mid-capture. */
 export async function sweepStaleRecorderTemps(

@@ -669,9 +669,14 @@ Seeded keys:
 | `merge.max_stretch_factor` | `2.5` | Above this, fall back to speed floor + hold. |
 | `encode.web_crf` | `28` | |
 | `encode.web_audio_kbps` | `96` | |
+| `encode.merge_timeout_ms` | `1800000` | 30 min. Kill deadline for a merge or web-encode FFmpeg run. Added in Phase 9 by `20260725120000_encode_merge_timeout_setting.sql`, not by `seed_demo_data()` — see the note below. |
 | `queue.concurrency` | `1` | Tested to 3. |
 | `queue.auto_retry_limit` | `2` | Then `failed`. |
 | `deploy.dry_run` | `false` | Skips Netlify entirely; everything else runs. |
+
+Fifteen keys. Fourteen come from `seed_demo_data()` (§10); `encode.merge_timeout_ms` is inserted by its own migration instead, because §9.2 is forward-only and the seed function was already applied. The distinction is invisible in practice — migrations always run before the seed, and the function's `INSERT … ON CONFLICT (key) DO NOTHING` no-ops on a key that already exists — so every path yields the same fifteen rows. **A sixteenth key should go in the seed function, not follow this pattern.**
+
+`lib/settings.ts` carries a `SETTING_DEFAULTS` fallback for every key and warns when one is missing from the table, so an unseeded key degrades to its default rather than breaking the pipeline. It would, however, be invisible to the Settings screen (`PRD.md` §6.8), which enumerates this table.
 
 Resolution order for any overlapping value: **lead override → campaign value → `settings` default**. Nulls mean "inherit", which is why the override columns in §5.4 are nullable rather than defaulted.
 
@@ -895,6 +900,9 @@ supabase/
 
     -- Added after the Phase 6 review (PRD.md §11):
     20260723190000_import_batches_exists_list.sql  -- §5.2 exists_list + import_commit corrections
+
+    -- Added in Phase 9 (PRD.md §11):
+    20260725120000_encode_merge_timeout_setting.sql -- §5.12 — encode.merge_timeout_ms
   seed.sql                               -- one line: SELECT public.seed_demo_data();
 ```
 
@@ -927,7 +935,9 @@ The resolution is to declare the **column** in `core_tables` and add the **`FORE
 `seed.sql` provisions a demo campaign so a fresh clone has something to look at, and so the acceptance criteria in `PRD.md` §9 can be exercised without a real CSV.
 
 ```sql
--- Settings defaults (§5.12) — every key, so the Settings screen is never empty.
+-- Settings defaults (§5.12). Fourteen of the fifteen keys: encode.merge_timeout_ms
+-- arrived in Phase 9, after this function was already applied, so it is inserted
+-- by 20260725120000_encode_merge_timeout_setting.sql instead (§5.12, §9.2).
 INSERT INTO settings (key, value, description) VALUES
   ('recorder.viewport_width',   '1920',        'Browser width for website recording'),
   ('recorder.viewport_height',  '1080',        'Browser height for website recording'),

@@ -9,6 +9,7 @@ import { getSupabaseAdmin } from "@/lib/supabase"
 
 type CampaignLeadRow = Database["public"]["Tables"]["campaign_leads"]["Row"]
 type JobRunRow = Database["public"]["Tables"]["job_runs"]["Row"]
+type VideoRow = Database["public"]["Tables"]["videos"]["Row"]
 
 export type LeadContext = {
   campaignLead: CampaignLeadRow
@@ -16,6 +17,8 @@ export type LeadContext = {
     id: string
     slug: string
     intro_video_id: string | null
+    merge_layout: Database["public"]["Enums"]["merge_layout"]
+    pip_scale: number
     viewport_width: number
     viewport_height: number
     nav_timeout_ms: number
@@ -48,7 +51,16 @@ export type UsableRecording = {
   id: string
   local_path: string | null
   purged_at: string | null
+  duration_ms: number | null
 }
+
+export type LogScope =
+  | "importer"
+  | "recorder"
+  | "merger"
+  | "deployer"
+  | "web"
+  | "worker"
 
 export type ClaimResult = "claimed" | "skipped" | "gone"
 
@@ -72,7 +84,9 @@ export async function loadLeadBase(
     await Promise.all([
       getSupabaseAdmin()
         .from("campaigns")
-        .select("id, slug, intro_video_id, viewport_width, viewport_height, nav_timeout_ms")
+        .select(
+          "id, slug, intro_video_id, merge_layout, pip_scale, viewport_width, viewport_height, nav_timeout_ms",
+        )
         .eq("id", campaignLead.campaign_id)
         .maybeSingle(),
       getSupabaseAdmin()
@@ -112,7 +126,7 @@ export async function getUsableRecording(
 ): Promise<UsableRecording | null> {
   const { data, error } = await getSupabaseAdmin()
     .from("recordings")
-    .select("id, local_path, purged_at")
+    .select("id, local_path, purged_at, duration_ms")
     .eq("lead_id", leadId)
     .is("error_code", null)
     .is("purged_at", null)
@@ -259,14 +273,47 @@ export async function purgeRecording(recordingId: string): Promise<string | null
 export async function linkRecordingToCampaignLead(
   campaignLeadId: string,
   recordingId: string,
+  options?: { invalidateVideo?: boolean },
 ): Promise<void> {
+  const update: Database["public"]["Tables"]["campaign_leads"]["Update"] = {
+    recording_id: recordingId,
+  }
+
+  // Polarity inversion vs merge: a fresh capture clears video_id so merge
+  // re-encodes instead of skipping on the resume ladder.
+  if (options?.invalidateVideo) {
+    update.video_id = null
+  }
+
   const { error } = await getSupabaseAdmin()
     .from("campaign_leads")
-    .update({ recording_id: recordingId })
+    .update(update)
     .eq("id", campaignLeadId)
 
   if (error) {
     throw new Error(`Failed to link recording: ${error.message}`)
+  }
+}
+
+export async function writeStepLog(input: {
+  scope: LogScope
+  level: Database["public"]["Enums"]["log_level"]
+  message: string
+  campaignLeadId?: string | null
+  jobRunId?: string | null
+  meta?: Record<string, unknown>
+}): Promise<void> {
+  const { error } = await getSupabaseAdmin().from("logs").insert({
+    level: input.level,
+    scope: input.scope,
+    message: input.message,
+    campaign_lead_id: input.campaignLeadId ?? null,
+    job_run_id: input.jobRunId ?? null,
+    meta: (input.meta ?? {}) as Database["public"]["Tables"]["logs"]["Insert"]["meta"],
+  })
+
+  if (error) {
+    console.error(`[${input.scope}] failed to write log:`, error.message)
   }
 }
 
@@ -277,18 +324,7 @@ export async function writeRecorderLog(input: {
   jobRunId?: string | null
   meta?: Record<string, unknown>
 }): Promise<void> {
-  const { error } = await getSupabaseAdmin().from("logs").insert({
-    level: input.level,
-    scope: "recorder",
-    message: input.message,
-    campaign_lead_id: input.campaignLeadId ?? null,
-    job_run_id: input.jobRunId ?? null,
-    meta: (input.meta ?? {}) as Database["public"]["Tables"]["logs"]["Insert"]["meta"],
-  })
-
-  if (error) {
-    console.error("[recorder] failed to write log:", error.message)
-  }
+  await writeStepLog({ scope: "recorder", ...input })
 }
 
 export async function reloadCampaignLead(
@@ -671,4 +707,220 @@ export async function listOpenJobRuns(): Promise<
   }
 
   return data ?? []
+}
+
+export async function getIntroVideo(
+  introVideoId: string,
+): Promise<Pick<
+  Database["public"]["Tables"]["intro_videos"]["Row"],
+  "id" | "local_path" | "duration_ms"
+> | null> {
+  const { data, error } = await getSupabaseAdmin()
+    .from("intro_videos")
+    .select("id, local_path, duration_ms")
+    .eq("id", introVideoId)
+    .maybeSingle()
+
+  if (error) {
+    throw new Error(`Failed to load intro video: ${error.message}`)
+  }
+
+  return data
+}
+
+export async function getVideoForCampaignLead(
+  campaignLeadId: string,
+): Promise<VideoRow | null> {
+  const { data, error } = await getSupabaseAdmin()
+    .from("videos")
+    .select("*")
+    .eq("campaign_lead_id", campaignLeadId)
+    .maybeSingle()
+
+  if (error) {
+    throw new Error(`Failed to load video row: ${error.message}`)
+  }
+
+  return data
+}
+
+export async function upsertVideoEncode(input: {
+  campaignLeadId: string
+  introVideoId: string | null
+  masterPath: string
+  webPath: string
+  posterPath: string | null
+  masterSizeBytes: number
+  webSizeBytes: number
+  durationMs: number
+  stretchFactor: number
+  usedSpeedFloor: boolean
+}): Promise<string> {
+  const now = new Date().toISOString()
+  const { data, error } = await getSupabaseAdmin()
+    .from("videos")
+    .upsert(
+      {
+        campaign_lead_id: input.campaignLeadId,
+        intro_video_id: input.introVideoId,
+        master_path: input.masterPath,
+        web_path: input.webPath,
+        poster_path: input.posterPath,
+        master_size_bytes: input.masterSizeBytes,
+        web_size_bytes: input.webSizeBytes,
+        duration_ms: input.durationMs,
+        stretch_factor: input.stretchFactor,
+        used_speed_floor: input.usedSpeedFloor,
+        encoded_at: now,
+        web_storage_key: null,
+        web_public_url: null,
+        uploaded_at: null,
+      },
+      { onConflict: "campaign_lead_id" },
+    )
+    .select("id")
+    .single()
+
+  if (error) {
+    throw new Error(`Failed to upsert video encode: ${error.message}`)
+  }
+
+  return data.id
+}
+
+export async function linkVideoToCampaignLead(
+  campaignLeadId: string,
+  videoId: string,
+): Promise<void> {
+  const { error } = await getSupabaseAdmin()
+    .from("campaign_leads")
+    .update({ video_id: videoId })
+    .eq("id", campaignLeadId)
+
+  if (error) {
+    throw new Error(`Failed to link video to campaign lead: ${error.message}`)
+  }
+}
+
+/**
+ * PostgREST reports no error when an UPDATE matches zero rows, so every video
+ * update below selects the touched row back and treats a miss as a failure.
+ * Reserving a key that lands nowhere would orphan the uploaded object.
+ */
+function assertVideoRowTouched(
+  data: { id: string } | null,
+  error: { message: string } | null,
+  what: string,
+  campaignLeadId: string,
+): void {
+  if (error) {
+    throw new Error(`Failed to ${what}: ${error.message}`)
+  }
+  if (!data) {
+    throw new Error(
+      `Failed to ${what}: no video row for campaign lead ${campaignLeadId}`,
+    )
+  }
+}
+
+export async function reserveVideoStorageKey(input: {
+  campaignLeadId: string
+  webStorageKey: string
+}): Promise<void> {
+  const { data, error } = await getSupabaseAdmin()
+    .from("videos")
+    .update({ web_storage_key: input.webStorageKey })
+    .eq("campaign_lead_id", input.campaignLeadId)
+    .select("id")
+    .maybeSingle()
+
+  assertVideoRowTouched(
+    data,
+    error,
+    "reserve video storage key",
+    input.campaignLeadId,
+  )
+}
+
+export async function updateVideoUpload(input: {
+  campaignLeadId: string
+  webPublicUrl: string
+}): Promise<void> {
+  const { data, error } = await getSupabaseAdmin()
+    .from("videos")
+    .update({
+      web_public_url: input.webPublicUrl,
+      uploaded_at: new Date().toISOString(),
+    })
+    .eq("campaign_lead_id", input.campaignLeadId)
+    .select("id")
+    .maybeSingle()
+
+  assertVideoRowTouched(
+    data,
+    error,
+    "update video upload",
+    input.campaignLeadId,
+  )
+}
+
+export async function updateVideoWebEncode(input: {
+  campaignLeadId: string
+  webPath: string
+  webSizeBytes: number
+}): Promise<void> {
+  const { data, error } = await getSupabaseAdmin()
+    .from("videos")
+    .update({
+      web_path: input.webPath,
+      web_size_bytes: input.webSizeBytes,
+    })
+    .eq("campaign_lead_id", input.campaignLeadId)
+    .select("id")
+    .maybeSingle()
+
+  assertVideoRowTouched(data, error, "update web encode", input.campaignLeadId)
+}
+
+export async function updateVideoPosterPath(input: {
+  campaignLeadId: string
+  posterPath: string
+}): Promise<void> {
+  const { data, error } = await getSupabaseAdmin()
+    .from("videos")
+    .update({ poster_path: input.posterPath })
+    .eq("campaign_lead_id", input.campaignLeadId)
+    .select("id")
+    .maybeSingle()
+
+  assertVideoRowTouched(
+    data,
+    error,
+    "update video poster path",
+    input.campaignLeadId,
+  )
+}
+
+export async function discardMergeArtifacts(
+  campaignLeadId: string,
+): Promise<{ oldStorageKey: string | null; paths: string[] }> {
+  const video = await getVideoForCampaignLead(campaignLeadId)
+  if (!video) {
+    return { oldStorageKey: null, paths: [] }
+  }
+
+  const paths = [video.master_path, video.web_path, video.poster_path].filter(
+    (path): path is string => path != null,
+  )
+
+  const { error } = await getSupabaseAdmin()
+    .from("videos")
+    .delete()
+    .eq("campaign_lead_id", campaignLeadId)
+
+  if (error) {
+    throw new Error(`Failed to discard video row: ${error.message}`)
+  }
+
+  return { oldStorageKey: video.web_storage_key, paths }
 }

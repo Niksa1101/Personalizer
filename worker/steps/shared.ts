@@ -5,6 +5,7 @@ export type StepContext = {
   lead: LeadContext
   settings: JobSettings
   signal: AbortSignal
+  jobRunId: string
 }
 
 export type Step = {

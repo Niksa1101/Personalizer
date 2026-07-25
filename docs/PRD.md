@@ -588,6 +588,8 @@ Also: three server-rendered dates moved off raw `toLocaleString()` onto a shared
 
 No schema changes — `supabase/migrations/` untouched since Phase 6's `20260723190000_import_batches_exists_list.sql`.
 
+> **Known issue — `verify:worker` does not exit.** On success `main()` returns without `process.exit(0)` while the ioredis connection from `lib/queue` is still open, so Node's event loop never drains and the process hangs *after* printing `All 6 checks passed.` — all work and teardown already done. Re-confirmed on 2026-07-25 (idle at 0.125s CPU, holding an ESTABLISHED socket to 6379). Harmless when run by hand; in CI it is a job that hangs to the runner timeout instead of reporting green, and it swallows the output of anything that buffers until EOF (`| tail`). Fix is to close the connection in `finally` or exit explicitly.
+
 ---
 
 #### Phase 8 — Recorder ✅ **DONE** (2026-07-24)
@@ -628,13 +630,36 @@ No schema changes — Phase 8 is application code only; `supabase/migrations/` i
 
 ---
 
-#### Phase 9 — Merge
+#### Phase 9 — Merge ✅ **DONE** (2026-07-25)
 
 **Goal:** the final video.
 
-Master-clock math with all three cases (`Tech.md` §9.1), the PiP filter graph (§9.2), 1080p master + 720p `+faststart` web version (§9.3), `stretch_factor` and `used_speed_floor` persisted, per-lead layout/scale overrides.
+~~Master-clock math with all three cases (`Tech.md` §9.1), the PiP filter graph (§9.2), 1080p master + 720p `+faststart` web version (§9.3), `stretch_factor` and `used_speed_floor` persisted, per-lead layout/scale overrides.~~ Implemented across `lib/video/merge-plan.ts` (master-clock math + filter-graph arg builders), `lib/video/merge-action.ts` (resume ladder), `lib/storage.ts` (artifact paths + output-dir resolver), `worker/video/merge.ts` + `worker/video/upload.ts` (orchestration + Supabase upload), `worker/steps/merge.ts` (thin step), `worker/db.ts` (video CRUD + generalized `writeStepLog`), `worker/steps/record.ts` + `lib/pipeline-control.ts` (forced re-merge invalidation), and `scripts/verify-merge.ts`.
 
-**Exit:** every output's duration equals its intro's duration, within one frame. A recording shorter than the intro triggers the speed-floor fallback and sets the flag. The bubble is circular, correctly placed, and correctly sized. Audio is the intro's only. The web version starts playing before it finishes downloading.
+**Exit — all six met:**
+
+| Criterion | Verified by |
+|---|---|
+| Every output's duration equals its intro's, within one frame | `verify:merge` legs ①–③ (34ms video / 67ms container tolerance); leg ④ at `D_intro + D_rec` |
+| A recording shorter than the intro triggers the speed-floor fallback and sets the flag | `verify:merge` leg ③ + `merge-plan.test.ts` |
+| The bubble is circular, correctly placed, and correctly sized | Nine-point pixel sampling in `verify:merge` (bubble edges intro-blue, corners recording-red) + a `rect_br` leg asserting all four corners are intro-blue — the un-masked inverse — plus geometry unit tests for all layouts |
+| Audio is the intro's only | Stream-count assertions on master and web in `verify:merge` |
+| The web version starts playing before it finishes downloading | `moov`-before-`mdat` box-order parse on `web.mp4` |
+| `typecheck`, `lint`, `test` clean; `db push` a no-op | CI / manual — with one deviation: Phase 9 ships a data-only migration for the new `encode.merge_timeout_ms` setting (finding 6). It is applied, and `db push` is a no-op *after* it. |
+
+Verified by `npm run verify:merge` (hermetic, env-free, **32 assertions**) and `npm test` (**136 tests**).
+
+#### Review findings (Phase 9)
+
+1. **`cacheControl` / `immutable` deviation** — supabase-js accepts a seconds value only; uploaded objects get `max-age=31536000` without the `immutable` token from `DB.md` §8. Documented here rather than silently diverging.
+2. **Windows circular mask** — Tech.md §9.2's `format=rgba,geq=…:a=…` silently drops the bubble on Windows FFmpeg builds. Production uses `format=gray,geq=lum=255*lte(hypot…)` before `alphamerge` instead (same visual result; verified by nine-point sampling in `verify:merge`).
+3. **`geq` mask cost** — left as specced; wall-time prints in `verify:merge` use `testsrc2` (detailed content) on every leg except the geometry sampler, so the measurement hook reflects realistic encode cost rather than a flat-colour source.
+4. **Storage upload reservation** — merge reserves `web_storage_key` before upload (`upsert: true` on retry), marks completion via `uploaded_at`, and clears upload columns on re-encode upsert. Crash between upload and DB write no longer orphans a paid storage object; the resume ladder re-uploads to the same reserved key. Because PostgREST returns no error when an `UPDATE` matches zero rows, all four `videos` update helpers in `worker/db.ts` select the touched row back and throw on a miss — a silently no-op reservation would relocate the orphan rather than remove it.
+5. **Lead-scoped recording resolution** — merge resolves recordings through `evaluateRecordingPrecheck` (lead-scoped, same as the precondition), self-healing `campaign_leads.recording_id` when a lead's recording is reused across campaigns.
+
+6. **The new setting was unseeded.** Phase 9 added a fifteenth key, `encode.merge_timeout_ms`, to `lib/settings.ts` but not to the database. `resolveValue` falls back to `SETTING_DEFAULTS` for a missing key, so merge behaved correctly — but it warned on every resolve, and the Settings screen (§6.8) enumerates the table, so the operator could not have seen or tuned it. Closed by `20260725120000_encode_merge_timeout_setting.sql`.
+
+**One schema change** — `20260725120000_encode_merge_timeout_setting.sql`, a single idempotent `INSERT` into `settings` (finding 6). No table, column, enum, index, or policy is touched. Applied to the live project on 2026-07-25; the recorded version matches the filename, so a subsequent `db push` reports *"Remote database is up to date."* Forward-only per `DB.md` §9.2: `seed_demo_data()` was already applied and is not edited, and its `ON CONFLICT (key) DO NOTHING` makes the row's provenance irrelevant — every path yields the same fifteen rows.
 
 ---
 

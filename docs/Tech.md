@@ -595,9 +595,9 @@ ffmpeg
     [1:v]scale=${pipW}:${pipH}:force_original_aspect_ratio=increase,
          crop=${pipW}:${pipH},fps=30[pipsrc];
 
-    # circular mask via alphaextract on a drawn ellipse
-    color=black@0:s=${pipW}x${pipH},format=rgba,
-      geq=r=0:g=0:b=0:a='if(lte(hypot(X-${cx},Y-${cy}),${r}),255,0)'[mask];
+    # circular mask: a greyscale luma disc fed to alphamerge (see below)
+    color=c=black:s=${pipW}x${pipH},format=gray,
+      geq=lum=255*lte(hypot(X-${cx}\,Y-${cy})\,${r})[mask];
     [pipsrc][mask]alphamerge[pip];
 
     [base][pip]overlay=${ox}:${oy}:shortest=0[outv]
@@ -610,6 +610,8 @@ ffmpeg
 ```
 
 Where `pipW = round(1920 × pip_scale)` (default 0.20 → 384px), `pipH = pipW` for bubble layouts, `r = pipW/2`, and `(ox, oy)` derive from `merge_layout` with a 48px margin — `bubble_br` → `(1920−pipW−48, 1080−pipH−48)`.
+
+> **The mask is greyscale-luma, not RGBA — corrected in Phase 9, do not revert.** This document originally specified `format=rgba` with `geq=r=0:g=0:b=0:a='if(lte(hypot(…),r),255,0)'`. On the Windows FFmpeg builds this project ships, that produces **no bubble at all** — the `a=` plane is silently discarded and `alphamerge` receives an opaque frame, so the merge succeeds and the output is simply wrong. `format=gray` with `lum=255*lte(…)` gives the identical visual result and works on the builds in use. Commas inside `hypot()` are backslash-escaped because they would otherwise separate filter arguments. Verified by nine-point pixel sampling in `verify:merge` (`PRD.md` §11 Phase 9, finding 2); `lib/video/merge-plan.ts` is the implementation.
 
 `-t D_intro` is a hard truncation and the belt-and-braces guarantee that the master clock holds even if a filter misbehaves. `shortest=0` prevents the overlay from ending the output early.
 
@@ -627,6 +629,8 @@ Speed-floor fallback adds `tpad=stop_mode=clone:stop_duration=${hold}` to the `[
 The web version is produced from the master in a second pass, not re-composited. `+faststart` moves the moov atom to the front so the landing page can begin playback before the file finishes downloading — without it, a cold mobile view stalls on a blank player.
 
 Local `web.mp4` is deleted after a successful upload and deploy; the Supabase copy is canonical from then on.
+
+Both FFmpeg runs are bounded by `settings.encode.merge_timeout_ms` (default 30 min, `DB.md` §5.12) and killed on the job's abort signal. Without a deadline a wedged FFmpeg holds its queue slot forever, which at `queue.concurrency = 1` stalls the whole batch — indistinguishable from a dead worker on the dashboard.
 
 ### 9.4 Binary
 

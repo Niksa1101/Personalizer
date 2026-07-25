@@ -268,6 +268,81 @@ export type Database = {
         }
         Relationships: []
       }
+      videos: {
+        Row: {
+          id: string
+          campaign_lead_id: string
+          intro_video_id: string | null
+          master_path: string | null
+          web_path: string | null
+          web_storage_key: string | null
+          web_public_url: string | null
+          duration_ms: number | null
+          stretch_factor: number | null
+          used_speed_floor: boolean
+          master_size_bytes: number | null
+          web_size_bytes: number | null
+          poster_path: string | null
+          encoded_at: string | null
+          uploaded_at: string | null
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          campaign_lead_id: string
+          intro_video_id?: string | null
+          master_path?: string | null
+          web_path?: string | null
+          web_storage_key?: string | null
+          web_public_url?: string | null
+          duration_ms?: number | null
+          stretch_factor?: number | null
+          used_speed_floor?: boolean
+          master_size_bytes?: number | null
+          web_size_bytes?: number | null
+          poster_path?: string | null
+          encoded_at?: string | null
+          uploaded_at?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          campaign_lead_id?: string
+          intro_video_id?: string | null
+          master_path?: string | null
+          web_path?: string | null
+          web_storage_key?: string | null
+          web_public_url?: string | null
+          duration_ms?: number | null
+          stretch_factor?: number | null
+          used_speed_floor?: boolean
+          master_size_bytes?: number | null
+          web_size_bytes?: number | null
+          poster_path?: string | null
+          encoded_at?: string | null
+          uploaded_at?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "videos_campaign_lead_id_fkey"
+            columns: ["campaign_lead_id"]
+            isOneToOne: true
+            referencedRelation: "campaign_leads"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "videos_intro_video_id_fkey"
+            columns: ["intro_video_id"]
+            isOneToOne: false
+            referencedRelation: "intro_videos"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       leads: {
         Row: {
           id: string
