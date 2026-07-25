@@ -222,7 +222,7 @@ export async function updateCampaignGeneral(
       p_campaign_id: id,
       p_name: input.name,
       p_slug: input.slug,
-      p_description: input.description ?? null,
+      p_description: input.description ?? "",
     },
   )
 

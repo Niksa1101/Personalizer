@@ -28,6 +28,7 @@ export type SettingKey =
   | "queue.concurrency"
   | "queue.auto_retry_limit"
   | "deploy.dry_run"
+  | "deploy.timeout_ms"
 
 export type SettingValues = {
   "recorder.viewport_width": number
@@ -45,6 +46,7 @@ export type SettingValues = {
   "queue.concurrency": number
   "queue.auto_retry_limit": number
   "deploy.dry_run": boolean
+  "deploy.timeout_ms": number
 }
 
 export const SETTING_KEYS = [
@@ -63,6 +65,7 @@ export const SETTING_KEYS = [
   "queue.concurrency",
   "queue.auto_retry_limit",
   "deploy.dry_run",
+  "deploy.timeout_ms",
 ] as const satisfies readonly SettingKey[]
 
 /** Seed defaults from DB.md §5.12 — used when a key is absent from the DB. */
@@ -82,6 +85,7 @@ export const SETTING_DEFAULTS: SettingValues = {
   "queue.concurrency": 1,
   "queue.auto_retry_limit": 2,
   "deploy.dry_run": false,
+  "deploy.timeout_ms": 300_000,
 }
 
 const MERGE_LAYOUTS = new Set<MergeLayout>([
@@ -115,6 +119,7 @@ function parseSettingValue<K extends SettingKey>(
     case "encode.web_crf":
     case "encode.web_audio_kbps":
     case "encode.merge_timeout_ms":
+    case "deploy.timeout_ms":
     case "queue.concurrency":
     case "queue.auto_retry_limit": {
       const value = typeof raw === "number" ? raw : Number(raw)
