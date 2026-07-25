@@ -277,6 +277,7 @@ export type Database = {
           web_path: string | null
           web_storage_key: string | null
           web_public_url: string | null
+          poster_storage_key: string | null
           duration_ms: number | null
           stretch_factor: number | null
           used_speed_floor: boolean
@@ -296,6 +297,7 @@ export type Database = {
           web_path?: string | null
           web_storage_key?: string | null
           web_public_url?: string | null
+          poster_storage_key?: string | null
           duration_ms?: number | null
           stretch_factor?: number | null
           used_speed_floor?: boolean
@@ -315,6 +317,7 @@ export type Database = {
           web_path?: string | null
           web_storage_key?: string | null
           web_public_url?: string | null
+          poster_storage_key?: string | null
           duration_ms?: number | null
           stretch_factor?: number | null
           used_speed_floor?: boolean
@@ -339,6 +342,59 @@ export type Database = {
             columns: ["intro_video_id"]
             isOneToOne: false
             referencedRelation: "intro_videos"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      landing_pages: {
+        Row: {
+          id: string
+          campaign_lead_id: string
+          path: string
+          html: string | null
+          content_sha1: string | null
+          deploy_status: Database["public"]["Enums"]["deploy_status"]
+          netlify_deploy_id: string | null
+          deployed_at: string | null
+          unpublished_at: string | null
+          error_detail: string | null
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          campaign_lead_id: string
+          path: string
+          html?: string | null
+          content_sha1?: string | null
+          deploy_status?: Database["public"]["Enums"]["deploy_status"]
+          netlify_deploy_id?: string | null
+          deployed_at?: string | null
+          unpublished_at?: string | null
+          error_detail?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          campaign_lead_id?: string
+          path?: string
+          html?: string | null
+          content_sha1?: string | null
+          deploy_status?: Database["public"]["Enums"]["deploy_status"]
+          netlify_deploy_id?: string | null
+          deployed_at?: string | null
+          unpublished_at?: string | null
+          error_detail?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "landing_pages_campaign_lead_id_fkey"
+            columns: ["campaign_lead_id"]
+            isOneToOne: true
+            referencedRelation: "campaign_leads"
             referencedColumns: ["id"]
           },
         ]
@@ -612,8 +668,16 @@ export type Database = {
         }
         Returns: Json
       }
+      rename_campaign_slug: {
+        Args: {
+          p_campaign_id: string
+          p_slug: string
+        }
+        Returns: undefined
+      }
     }
     Enums: {
+      deploy_status: "pending" | "uploading" | "live" | "failed" | "removed"
       error_code:
         | "dns_failure"
         | "connection_refused"

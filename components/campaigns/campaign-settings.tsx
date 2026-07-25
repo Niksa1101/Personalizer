@@ -51,6 +51,7 @@ export function CampaignSettings({
           campaignId={campaign.id}
           initialTemplate={campaign.landing_template}
           sampleLead={sampleLead}
+          ctaType={campaign.cta_type}
           ctaUrl={campaign.cta_url}
           ctaLabel={campaign.cta_label}
         />

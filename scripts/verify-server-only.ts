@@ -1,15 +1,20 @@
 /**
  * Negative build test: a client import of lib/supabase.ts must fail (D20, D30).
+ * Static scan: lib/landing-page.ts stays browser-safe (D55).
  * Self-cleaning — writes a temp module, runs next build, deletes the module.
  */
 
 import { execSync } from "node:child_process"
-import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import path from "node:path"
 
 const ROOT = path.resolve(import.meta.dirname, "..")
 const TEMP_DIR = path.join(ROOT, "app", "verify-server-only-temp")
 const TEMP_PAGE = path.join(TEMP_DIR, "page.tsx")
+const LANDING_PAGE_MODULE = path.join(ROOT, "lib", "landing-page.ts")
+const LANDING_PAGE_IMPORTS = [
+  path.join(ROOT, "lib", "landing-template.ts"),
+]
 // `next build` generates route/validator types from the app tree, so the run
 // below bakes the temp page into them. Left behind, they outlive the deleted
 // page and break the next `tsc --noEmit` with TS2307. Next regenerates the
@@ -34,7 +39,33 @@ function cleanup(): void {
   }
 }
 
+function assertLandingPageBrowserSafe(): void {
+  const files = [LANDING_PAGE_MODULE, ...LANDING_PAGE_IMPORTS]
+  const nodeImport = /from\s+["']node:[^"']+["']|require\s*\(\s*["']node:[^"']+["']\s*\)/
+  const serverOnlyImport = /from\s+["']server-only["']|require\s*\(\s*["']server-only["']\s*\)/
+
+  for (const file of files) {
+    const source = readFileSync(file, "utf8")
+    const rel = path.relative(ROOT, file)
+
+    if (nodeImport.test(source)) {
+      console.error(`FAIL  ${rel} imports node:* — not browser-safe`)
+      process.exit(1)
+    }
+
+    if (serverOnlyImport.test(source)) {
+      console.error(`FAIL  ${rel} imports server-only — not browser-safe`)
+      process.exit(1)
+    }
+  }
+
+  console.log(
+    "PASS  lib/landing-page.ts and direct imports are browser-safe (no node:*, no server-only)",
+  )
+}
+
 function main(): void {
+  assertLandingPageBrowserSafe()
   cleanup()
 
   try {

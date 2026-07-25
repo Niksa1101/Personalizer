@@ -6,6 +6,10 @@ type LeadRow = Database["public"]["Tables"]["leads"]["Row"]
 export const SAMPLE_VIDEO_URL =
   "https://storage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4"
 
+/** Tiny inline JPEG for template preview — no third-party fetch (D30). */
+export const SAMPLE_POSTER_URL =
+  "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////2wBDAf//////////////////////////////////////////////////////////////////////////////////////wAARCAABAAEDASIAAhEBAxEB/8QAFAABAAAAAAAAAAAAAAAAAAAAAv/EABQQAQAAAAAAAAAAAAAAAAAAAAD/xAAUAQEAAAAAAAAAAAAAAAAAAAAA/9oADAMBAAIQAxAAAAGfAP/EABQRAQAAAAAAAAAAAAAAAAAAAAD/2gAIAQEAAQUCf//Z"
+
 /** Every placeholder token from DB.md §5.1.1. */
 export const TEMPLATE_PLACEHOLDERS = [
   "first_name",
@@ -21,6 +25,7 @@ export const TEMPLATE_PLACEHOLDERS = [
   "industry",
   "ref",
   "video_url",
+  "poster_url",
   "cta_url",
   "cta_label",
 ] as const
@@ -77,25 +82,25 @@ export const DEFAULT_LANDING_TEMPLATE = `<!doctype html>
   * { box-sizing: border-box; }
   body {
     margin: 0;
-    padding: 24px 20px 48px;
-    font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    padding: 20px 16px 40px;
+    font: 15px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
     background: #fafaf9;
     color: #1c1917;
   }
   main { max-width: 640px; margin: 0 auto; }
   .eyebrow {
-    margin: 0 0 8px;
-    font-size: 13px;
+    margin: 0 0 6px;
+    font-size: 12px;
     letter-spacing: .08em;
     text-transform: uppercase;
     color: #78716c;
   }
-  h1 { margin: 0 0 12px; font-size: 28px; line-height: 1.25; font-weight: 650; }
-  .lede { margin: 0 0 24px; font-size: 17px; color: #44403c; }
-  .meta { margin: 0 0 20px; font-size: 14px; color: #78716c; }
+  h1 { margin: 0 0 10px; font-size: 24px; line-height: 1.25; font-weight: 650; }
+  .lede { margin: 0 0 20px; font-size: 16px; color: #44403c; }
+  .meta { margin: 0 0 18px; font-size: 13px; color: #78716c; }
   .player {
-    margin: 0 0 28px;
-    border-radius: 14px;
+    margin: 0 0 24px;
+    border-radius: 12px;
     overflow: hidden;
     background: #1c1917;
     box-shadow: 0 1px 2px rgba(0,0,0,.06), 0 8px 24px rgba(0,0,0,.10);
@@ -103,20 +108,25 @@ export const DEFAULT_LANDING_TEMPLATE = `<!doctype html>
   video { display: block; width: 100%; height: auto; background: #1c1917; }
   .cta {
     display: block;
-    padding: 15px 24px;
+    min-height: 48px;
+    padding: 14px 20px;
     border-radius: 10px;
     background: #1c1917;
     color: #fafaf9;
-    font-size: 17px;
+    font-size: 16px;
     font-weight: 600;
+    line-height: 1.25;
     text-align: center;
     text-decoration: none;
   }
   .cta:hover { background: #292524; }
-  footer { margin: 32px 0 0; font-size: 14px; color: #78716c; }
+  footer { margin: 28px 0 0; font-size: 13px; color: #78716c; }
   @media (min-width: 640px) {
-    body { padding: 56px 24px; }
+    body { padding: 56px 24px; font-size: 16px; }
     h1 { font-size: 34px; }
+    .lede { font-size: 17px; }
+    .meta, footer { font-size: 14px; }
+    .cta { min-height: 52px; padding: 16px 24px; font-size: 17px; }
   }
   @media (prefers-color-scheme: dark) {
     body { background: #1c1917; color: #fafaf9; }
@@ -135,7 +145,7 @@ export const DEFAULT_LANDING_TEMPLATE = `<!doctype html>
   <p class="meta">{{full_name}} · {{city}}, {{state}} {{country}} · {{industry}} · {{email}} · {{phone}}</p>
 
   <div class="player">
-    <video controls playsinline preload="metadata">
+    <video controls playsinline preload="none" poster="{{poster_url}}">
       <source src="{{video_url}}" type="video/mp4">
       Your browser cannot play this video.
     </video>
@@ -158,7 +168,7 @@ function stringOrEmpty(value: string | null | undefined): string {
 
 export function leadToTemplateValues(
   lead: SampleLead,
-  extras?: Pick<TemplateValues, "video_url" | "cta_url" | "cta_label">,
+  extras?: Pick<TemplateValues, "video_url" | "poster_url" | "cta_url" | "cta_label">,
 ): TemplateValues {
   return {
     first_name: stringOrEmpty(lead.first_name),
@@ -174,6 +184,7 @@ export function leadToTemplateValues(
     industry: stringOrEmpty(lead.industry),
     ref: stringOrEmpty(lead.ref),
     video_url: extras?.video_url ?? SAMPLE_VIDEO_URL,
+    poster_url: extras?.poster_url ?? SAMPLE_POSTER_URL,
     cta_url: extras?.cta_url ?? "",
     cta_label: extras?.cta_label ?? "",
   }
@@ -181,13 +192,13 @@ export function leadToTemplateValues(
 
 export function sampleValuesFor(
   lead: SampleLead,
-  extras?: Pick<TemplateValues, "video_url" | "cta_url" | "cta_label">,
+  extras?: Pick<TemplateValues, "video_url" | "poster_url" | "cta_url" | "cta_label">,
 ): TemplateValues {
   return leadToTemplateValues(lead, extras)
 }
 
 /** Replace {{token}} placeholders. Unknown or missing tokens render empty.
- *  Output is unescaped — Phase 11 must HTML-escape lead values before public rendering. */
+ *  Values are expected to be pre-processed by renderLandingHtml for public output. */
 export function substituteTemplate(
   html: string,
   values: TemplateValues,
