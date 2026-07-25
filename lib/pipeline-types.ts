@@ -73,6 +73,14 @@ export type PipelineEventMeta = {
   duration_ms?: number
   from_step?: PipelineStep
   to_step?: PipelineStep
+  stretch_factor?: number
+  used_speed_floor?: boolean
+  hold_ms?: number
+  layout?: string
+  pip_px?: number
+  master_ms?: number
+  web_ms?: number
+  poster_ms?: number
 }
 
 export function nextPipelineStep(step: PipelineStep): PipelineStep | null {

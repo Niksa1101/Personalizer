@@ -186,7 +186,9 @@ export const recordStep: Step = {
           screenshotBeforePath: captured.screenshotBeforeRelPath,
           screenshotAfterPath: captured.screenshotAfterRelPath,
         })
-        await linkRecordingToCampaignLead(campaignLead.id, existing.id)
+        await linkRecordingToCampaignLead(campaignLead.id, existing.id, {
+          invalidateVideo: true,
+        })
         await writeRecorderLog({
           level: "info",
           message: "Website recording capture succeeded (forced re-record).",
@@ -241,7 +243,9 @@ export const recordStep: Step = {
         throw insertError
       }
 
-      await linkRecordingToCampaignLead(campaignLead.id, recordingId)
+      await linkRecordingToCampaignLead(campaignLead.id, recordingId, {
+        invalidateVideo: true,
+      })
 
       await writeRecorderLog({
         level: "info",

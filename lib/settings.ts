@@ -24,6 +24,7 @@ export type SettingKey =
   | "merge.max_stretch_factor"
   | "encode.web_crf"
   | "encode.web_audio_kbps"
+  | "encode.merge_timeout_ms"
   | "queue.concurrency"
   | "queue.auto_retry_limit"
   | "deploy.dry_run"
@@ -40,6 +41,7 @@ export type SettingValues = {
   "merge.max_stretch_factor": number
   "encode.web_crf": number
   "encode.web_audio_kbps": number
+  "encode.merge_timeout_ms": number
   "queue.concurrency": number
   "queue.auto_retry_limit": number
   "deploy.dry_run": boolean
@@ -57,6 +59,7 @@ export const SETTING_KEYS = [
   "merge.max_stretch_factor",
   "encode.web_crf",
   "encode.web_audio_kbps",
+  "encode.merge_timeout_ms",
   "queue.concurrency",
   "queue.auto_retry_limit",
   "deploy.dry_run",
@@ -75,6 +78,7 @@ export const SETTING_DEFAULTS: SettingValues = {
   "merge.max_stretch_factor": 2.5,
   "encode.web_crf": 28,
   "encode.web_audio_kbps": 96,
+  "encode.merge_timeout_ms": 1_800_000,
   "queue.concurrency": 1,
   "queue.auto_retry_limit": 2,
   "deploy.dry_run": false,
@@ -110,6 +114,7 @@ function parseSettingValue<K extends SettingKey>(
     case "merge.max_stretch_factor":
     case "encode.web_crf":
     case "encode.web_audio_kbps":
+    case "encode.merge_timeout_ms":
     case "queue.concurrency":
     case "queue.auto_retry_limit": {
       const value = typeof raw === "number" ? raw : Number(raw)

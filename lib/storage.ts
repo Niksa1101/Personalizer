@@ -54,7 +54,58 @@ export function screenshotAfterRelPath(
   return `${batchId}/${leadSlugValue}/screenshot-after.png`
 }
 
-/** In-flight Playwright WebM workspace: `tmp/rec-{token}/`. */
+/** Temp in-flight Playwright WebM workspace: `tmp/rec-{token}/`. */
 export function recordingTmpDirRelPath(token: string): string {
   return `tmp/rec-${token}`
+}
+
+/** 1080p master: `{outputDir}/final.mp4`. */
+export function finalRelPath(outputDir: string): string {
+  return `${outputDir}/final.mp4`
+}
+
+/** 720p local web copy: `{outputDir}/web.mp4`. */
+export function webRelPath(outputDir: string): string {
+  return `${outputDir}/web.mp4`
+}
+
+/** Landing-page poster frame: `{outputDir}/poster.jpg`. */
+export function posterRelPath(outputDir: string): string {
+  return `${outputDir}/poster.jpg`
+}
+
+/** Resolve the merge artifact directory (Tech.md §11). */
+export function resolveMergeOutputDir(input: {
+  recordingLocalPath: string | null
+  videoMasterPath: string | null
+}): string {
+  if (input.videoMasterPath) {
+    const parts = input.videoMasterPath.split("/").filter(Boolean)
+    parts.pop()
+    return parts.join("/")
+  }
+  if (input.recordingLocalPath) {
+    const parts = input.recordingLocalPath.split("/").filter(Boolean)
+    parts.pop()
+    return parts.join("/")
+  }
+  throw new Error("Cannot resolve merge output directory")
+}
+
+export function mergeTempMasterRelPath(
+  outputDir: string,
+  jobRunId: string,
+): string {
+  return `${outputDir}/final.${jobRunId}.tmp.mp4`
+}
+
+export function mergeTempWebRelPath(outputDir: string, jobRunId: string): string {
+  return `${outputDir}/web.${jobRunId}.tmp.mp4`
+}
+
+export function mergeTempPosterRelPath(
+  outputDir: string,
+  jobRunId: string,
+): string {
+  return `${outputDir}/poster.${jobRunId}.tmp.jpg`
 }

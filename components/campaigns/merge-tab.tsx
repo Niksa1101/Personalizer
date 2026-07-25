@@ -100,13 +100,12 @@ export function MergeTab({ campaign, intros, hasBuiltVideos }: MergeTabProps) {
           )}
           {hasBuiltVideos ? (
             <FieldDescription>
-              Changing the intro does not re-merge videos already built; it applies
-              only to leads not yet merged. Assigning an intro writes the FK only —
-              resume/enqueue is Phase 7.
+              Changing the intro, merge layout, or PiP scale does not re-merge
+              videos already built; changes apply only to leads not yet merged.
             </FieldDescription>
           ) : (
             <FieldDescription>
-              Assigning an intro writes the FK only — resume/enqueue is Phase 7.
+              Merge settings apply to leads processed after you save.
             </FieldDescription>
           )}
           <FieldError>{state.fieldErrors?.intro_video_id}</FieldError>

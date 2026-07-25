@@ -226,6 +226,7 @@ async function runOneStep(input: {
       lead: context,
       settings: jobSettings,
       signal: opts.signal,
+      jobRunId,
     })
   } catch (error) {
     if (error instanceof ShutdownError) {

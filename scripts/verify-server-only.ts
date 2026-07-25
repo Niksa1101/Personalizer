@@ -10,6 +10,11 @@ import path from "node:path"
 const ROOT = path.resolve(import.meta.dirname, "..")
 const TEMP_DIR = path.join(ROOT, "app", "verify-server-only-temp")
 const TEMP_PAGE = path.join(TEMP_DIR, "page.tsx")
+// `next build` generates route/validator types from the app tree, so the run
+// below bakes the temp page into them. Left behind, they outlive the deleted
+// page and break the next `tsc --noEmit` with TS2307. Next regenerates the
+// directory on any later build, so dropping it is safe.
+const GENERATED_TYPES_DIR = path.join(ROOT, ".next", "types")
 
 const TEMP_SOURCE = `"use client"
 
@@ -23,6 +28,9 @@ export default function VerifyClientImportPage() {
 function cleanup(): void {
   if (existsSync(TEMP_DIR)) {
     rmSync(TEMP_DIR, { recursive: true, force: true })
+  }
+  if (existsSync(GENERATED_TYPES_DIR)) {
+    rmSync(GENERATED_TYPES_DIR, { recursive: true, force: true })
   }
 }
 
