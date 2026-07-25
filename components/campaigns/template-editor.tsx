@@ -17,15 +17,16 @@ import {
 import { Textarea } from "@/components/ui/textarea"
 import {
   sampleValuesFor,
-  substituteTemplate,
   TEMPLATE_PLACEHOLDERS,
   type SampleLead,
 } from "@/lib/landing-template"
+import { renderLandingHtml } from "@/lib/landing-page"
 
 type TemplateEditorProps = {
   campaignId: string
   initialTemplate: string
   sampleLead: SampleLead
+  ctaType: string | null
   ctaUrl: string | null
   ctaLabel: string | null
 }
@@ -36,6 +37,7 @@ export function TemplateEditor({
   campaignId,
   initialTemplate,
   sampleLead,
+  ctaType,
   ctaUrl,
   ctaLabel,
 }: TemplateEditorProps) {
@@ -50,8 +52,8 @@ export function TemplateEditor({
       cta_url: ctaUrl ?? "",
       cta_label: ctaLabel ?? "",
     })
-    return substituteTemplate(template, values)
-  }, [template, sampleLead, ctaUrl, ctaLabel])
+    return renderLandingHtml(template, values, { cta_type: ctaType })
+  }, [template, sampleLead, ctaType, ctaUrl, ctaLabel])
 
   const wasPending = useRef(false)
 

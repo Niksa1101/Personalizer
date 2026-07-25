@@ -1,9 +1,11 @@
 import { strict as assert } from "node:assert"
 import { describe, it } from "node:test"
 
+import { renderLandingHtml } from "./landing-page"
 import {
   DEFAULT_LANDING_TEMPLATE,
   SAMPLE_LEAD,
+  SAMPLE_POSTER_URL,
   SAMPLE_VIDEO_URL,
   substituteTemplate,
   TEMPLATE_PLACEHOLDERS,
@@ -30,6 +32,7 @@ describe("substituteTemplate", () => {
     assert.match(result, /Alex/)
     assert.match(result, /Acme Plumbing/)
     assert.ok(result.includes(SAMPLE_VIDEO_URL))
+    assert.ok(result.includes(SAMPLE_POSTER_URL))
     assert.match(result, /Book a call/)
   })
 
@@ -56,18 +59,22 @@ describe("substituteTemplate", () => {
     assert.equal(result, "    Acme Plumbing")
     assert.ok(!result.includes("{{"))
   })
+})
 
+describe("renderLandingHtml with default template", () => {
   it("substitutes into the default landing template without leftover tokens", () => {
-    const result = substituteTemplate(
+    const result = renderLandingHtml(
       DEFAULT_LANDING_TEMPLATE,
       sampleValuesFor(SAMPLE_LEAD, {
         cta_url: "https://example.com/book",
         cta_label: "Book a call",
       }),
+      { cta_type: "website" },
     )
 
     assert.ok(!/\{\{[a-z_]+\}\}/.test(result))
-    assert.match(result, /<video controls playsinline preload="metadata">/)
+    assert.match(result, /<video controls playsinline preload="none"/)
+    assert.match(result, /poster="data:image\/jpeg;base64,/)
     assert.match(result, /noindex, nofollow/)
   })
 })
