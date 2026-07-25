@@ -81,6 +81,12 @@ export type PipelineEventMeta = {
   master_ms?: number
   web_ms?: number
   poster_ms?: number
+  poster_uploaded?: boolean
+  path?: string
+  bytes?: number
+  sha1_changed?: boolean
+  poster?: boolean
+  cta_dropped?: boolean
 }
 
 export function nextPipelineStep(step: PipelineStep): PipelineStep | null {

@@ -46,6 +46,7 @@ async function transitionToQueued(
   patch: {
     current_step?: PipelineStep
     video_id?: string | null
+    landing_page_id?: string | null
   },
 ): Promise<void> {
   const update: Database["public"]["Tables"]["campaign_leads"]["Update"] = {
@@ -146,12 +147,14 @@ export async function retryCampaignLead(
   const patch: {
     current_step?: PipelineStep
     video_id?: string | null
+    landing_page_id?: string | null
   } = {}
   if (mode === "restart") {
     // Polarity inversion vs record.ts: restart clears video_id but keeps
     // recording_id so the record step re-captures and merge re-encodes.
     patch.current_step = "recording"
     patch.video_id = null
+    patch.landing_page_id = null
   } else if (mode === "step") {
     if (!step) {
       throw new PipelineControlError(400, "step is required for mode=step")
@@ -159,6 +162,9 @@ export async function retryCampaignLead(
     patch.current_step = step
     if (step === "merge") {
       patch.video_id = null
+    }
+    if (step === "page") {
+      patch.landing_page_id = null
     }
   }
 
