@@ -588,7 +588,7 @@ Also: three server-rendered dates moved off raw `toLocaleString()` onto a shared
 
 No schema changes — `supabase/migrations/` untouched since Phase 6's `20260723190000_import_batches_exists_list.sql`.
 
-> **Known issue — `verify:worker` does not exit.** On success `main()` returns without `process.exit(0)` while the ioredis connection from `lib/queue` is still open, so Node's event loop never drains and the process hangs *after* printing `All 6 checks passed.` — all work and teardown already done. Re-confirmed on 2026-07-25 (idle at 0.125s CPU, holding an ESTABLISHED socket to 6379). Harmless when run by hand; in CI it is a job that hangs to the runner timeout instead of reporting green, and it swallows the output of anything that buffers until EOF (`| tail`). Fix is to close the connection in `finally` or exit explicitly.
+> **Fixed 2026-07-25 — `verify:worker` used not to exit.** `main()` returned without closing the ioredis connection `lib/queue` opens, so Node's event loop never drained and the script hung *after* printing `All 6 checks passed.`, all work and teardown already done (observed idle at 0.125s CPU holding an ESTABLISHED socket to 6379). Harmless by hand; in CI it was a job that ran to the runner timeout instead of reporting green, and it swallowed the output of anything buffering until EOF (`| tail`). The `finally` block now calls `closeQueueConnections()` — the same shutdown `worker/index.ts` already used — wrapped in its own `try`/`catch` so a rejected `quit()` cannot take the verdict down with it. Verified by an A/B against a stand-in Redis on the real `lib/queue` path: without the call the process hung until killed at 25s; with it, it exited on its own in 2s.
 
 ---
 

@@ -14,7 +14,11 @@ import type { Database } from "../lib/database.types"
 import { assertEnvOrExit } from "../lib/env-node"
 import type { PreviewResult } from "../lib/import-types"
 import { setIntroCampaigns } from "../lib/intros"
-import { assertRedisConnected, scanLiveWorkers } from "../lib/queue"
+import {
+  assertRedisConnected,
+  closeQueueConnections,
+  scanLiveWorkers,
+} from "../lib/queue"
 
 const MINIMAL_TEMPLATE =
   "<!doctype html><html><body><h1>{{company}}</h1></body></html>"
@@ -719,6 +723,26 @@ async function main(): Promise<void> {
     }
 
     rmSync(tempDir, { recursive: true, force: true })
+
+    // assertRedisConnected/scanLiveWorkers open the shared ioredis client, and
+    // an open client keeps Node's event loop alive indefinitely. Without this
+    // the script prints its verdict and then hangs forever with all work done —
+    // in CI, a job that runs to the runner timeout instead of reporting green.
+    // worker/index.ts closes the same way on shutdown.
+    //
+    // Best-effort: this runs in a finally, and quit() can reject if the
+    // connection already dropped. Throwing here would take the verdict below
+    // down with it — the same "result never reaches the operator" failure the
+    // close is here to fix.
+    try {
+      await closeQueueConnections()
+    } catch (error) {
+      console.warn(
+        `Failed to close queue connections: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      )
+    }
   }
 
   const failed = results.filter((r) => !r.ok)
