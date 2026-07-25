@@ -9,6 +9,11 @@ import {
 } from "@/app/(app)/campaigns/actions"
 import { Button } from "@/components/ui/button"
 import {
+  Alert,
+  AlertDescription,
+  AlertTitle,
+} from "@/components/ui/alert"
+import {
   Field,
   FieldDescription,
   FieldError,
@@ -65,8 +70,24 @@ export function TemplateEditor({
     wasPending.current = pending
   }, [pending, state])
 
+  const handleSubmit = () => {
+    if (!template.includes("{{video_url}}")) {
+      toast.warning(
+        "Template has no {{video_url}} placeholder — recipients will not see a video.",
+      )
+    }
+  }
+
   return (
-    <form action={formAction} className="space-y-4">
+    <form action={formAction} className="space-y-4" onSubmit={handleSubmit}>
+      <Alert>
+        <AlertTitle>Revised default template</AlertTitle>
+        <AlertDescription>
+          New campaigns use an improved default with poster support, larger tap
+          targets, and mobile-first typography. Your stored template is
+          unchanged.
+        </AlertDescription>
+      </Alert>
       <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_240px]">
         <Field>
           <FieldLabel htmlFor="landing_template">HTML template</FieldLabel>
