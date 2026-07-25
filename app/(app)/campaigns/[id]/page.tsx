@@ -8,6 +8,7 @@ import {
   getCampaign,
   getSampleLeadForCampaign,
   hasBuiltVideos,
+  listGeneratedPages,
   listIntroVideos,
 } from "@/lib/campaigns"
 
@@ -35,12 +36,14 @@ export default async function CampaignDetailPage({
 
   if (!campaign) notFound()
 
-  const [slugLocked, intros, builtVideos, sampleLead] = await Promise.all([
-    firstDeployLocked(id),
-    listIntroVideos(),
-    hasBuiltVideos(id),
-    getSampleLeadForCampaign(id),
-  ])
+  const [slugLocked, intros, builtVideos, sampleLead, generatedPagesResult] =
+    await Promise.all([
+      firstDeployLocked(id),
+      listIntroVideos(),
+      hasBuiltVideos(id),
+      getSampleLeadForCampaign(id),
+      listGeneratedPages(id),
+    ])
 
   return (
     <div className="flex flex-1 flex-col gap-6 p-6">
@@ -66,6 +69,8 @@ export default async function CampaignDetailPage({
         intros={intros}
         hasBuiltVideos={builtVideos}
         sampleLead={sampleLead}
+        generatedPages={generatedPagesResult.pages}
+        generatedPagesTotal={generatedPagesResult.totalCount}
       />
     </div>
   )

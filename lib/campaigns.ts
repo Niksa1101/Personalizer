@@ -200,21 +200,44 @@ export async function updateCampaignGeneral(
   id: string,
   input: UpdateCampaignGeneralInput,
 ): Promise<CampaignRow> {
-  const locked = await firstDeployLocked(id)
+  const current = await getCampaign(id)
+  if (!current) {
+    throw new Error("Campaign not found")
+  }
 
-  if (locked && input.slug !== (await getCampaign(id))?.slug) {
+  const locked = await firstDeployLocked(id)
+  const slugChanged = input.slug !== current.slug
+
+  if (locked && slugChanged) {
     throw new Error("Slug cannot be changed after the first deploy")
   }
 
-  if (!locked && (await slugExists(input.slug, id))) {
+  if (!locked && slugChanged && (await slugExists(input.slug, id))) {
     throw new Error("Slug is already in use")
+  }
+
+  if (slugChanged && !locked) {
+    const { error: rpcError } = await getSupabaseAdmin().rpc(
+      "rename_campaign_slug",
+      {
+        p_campaign_id: id,
+        p_slug: input.slug,
+      },
+    )
+
+    if (rpcError) {
+      if (rpcError.code === "23505") {
+        throw new Error("Slug is already in use")
+      }
+      throw new Error(`Failed to rename campaign slug: ${rpcError.message}`)
+    }
   }
 
   const { data, error } = await getSupabaseAdmin()
     .from("campaigns")
     .update({
       name: input.name,
-      slug: input.slug,
+      ...(slugChanged ? {} : { slug: input.slug }),
       description: input.description ?? null,
     })
     .eq("id", id)
@@ -358,6 +381,122 @@ export async function hasBuiltVideos(campaignId: string): Promise<boolean> {
   }
 
   return (count ?? 0) > 0
+}
+
+export type GeneratedPageListItem = {
+  campaignLeadId: string
+  leadRef: string
+  leadName: string | null
+  path: string
+  updatedAt: string
+}
+
+/** D57 — recent generated landing pages for the campaign template tab. */
+export async function listGeneratedPages(
+  campaignId: string,
+  limit = 10,
+): Promise<{ pages: GeneratedPageListItem[]; totalCount: number }> {
+  const { count, error: countError } = await getSupabaseAdmin()
+    .from("campaign_leads")
+    .select("id, landing_pages!inner(id)", { count: "exact", head: true })
+    .eq("campaign_id", campaignId)
+
+  if (countError) {
+    throw new Error(`Failed to count generated pages: ${countError.message}`)
+  }
+
+  const { data, error } = await getSupabaseAdmin()
+    .from("campaign_leads")
+    .select(
+      `
+      id,
+      landing_pages!inner (
+        path,
+        updated_at
+      ),
+      leads (
+        ref,
+        full_name,
+        first_name,
+        last_name
+      )
+    `,
+    )
+    .eq("campaign_id", campaignId)
+    .order("updated_at", { referencedTable: "landing_pages", ascending: false })
+    .limit(limit)
+
+  if (error) {
+    throw new Error(`Failed to list generated pages: ${error.message}`)
+  }
+
+  const pages: GeneratedPageListItem[] = (data ?? []).map((row) => {
+    const landingPages = row.landing_pages as
+      | { path: string; updated_at: string }
+      | { path: string; updated_at: string }[]
+    const landingPage = Array.isArray(landingPages)
+      ? landingPages[0]
+      : landingPages
+    const lead = row.leads as {
+      ref: string
+      full_name: string | null
+      first_name: string | null
+      last_name: string | null
+    } | null
+
+    return {
+      campaignLeadId: row.id,
+      leadRef: lead?.ref ?? "—",
+      leadName:
+        lead?.full_name ??
+        ([lead?.first_name, lead?.last_name].filter(Boolean).join(" ") ||
+          null),
+      path: landingPage.path,
+      updatedAt: landingPage.updated_at,
+    }
+  })
+
+  return { pages, totalCount: count ?? 0 }
+}
+
+export async function getLandingPageForLead(
+  campaignLeadId: string,
+): Promise<{ html: string; path: string; campaignId: string } | null> {
+  const { data, error } = await getSupabaseAdmin()
+    .from("campaign_leads")
+    .select(
+      `
+      campaign_id,
+      landing_pages (
+        html,
+        path
+      )
+    `,
+    )
+    .eq("id", campaignLeadId)
+    .maybeSingle()
+
+  if (error) {
+    throw new Error(`Failed to load landing page: ${error.message}`)
+  }
+
+  const landingPages = data?.landing_pages as
+    | { html: string | null; path: string }
+    | { html: string | null; path: string }[]
+    | null
+  const landingPage = Array.isArray(landingPages)
+    ? (landingPages[0] ?? null)
+    : landingPages
+
+  if (!data || !landingPage?.html) {
+    return null
+  }
+
+  return {
+    html: landingPage.html,
+    path: landingPage.path,
+    campaignId: data.campaign_id,
+  }
 }
 
 /** Most recently updated lead in the campaign, else the synthetic fixture (D19). */

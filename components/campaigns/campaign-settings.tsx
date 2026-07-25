@@ -3,10 +3,12 @@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { CtaTab } from "@/components/campaigns/cta-tab"
 import { GeneralTab } from "@/components/campaigns/general-tab"
+import { GeneratedPagesList } from "@/components/campaigns/generated-pages-list"
 import { MergeTab } from "@/components/campaigns/merge-tab"
 import { RecorderTab } from "@/components/campaigns/recorder-tab"
 import { TemplateEditor } from "@/components/campaigns/template-editor"
 import type { CampaignRow, IntroVideoOption } from "@/lib/campaign-types"
+import type { GeneratedPageListItem } from "@/lib/campaigns"
 import type { SampleLead } from "@/lib/landing-template"
 
 type CampaignSettingsProps = {
@@ -15,6 +17,8 @@ type CampaignSettingsProps = {
   intros: IntroVideoOption[]
   hasBuiltVideos: boolean
   sampleLead: SampleLead
+  generatedPages: GeneratedPageListItem[]
+  generatedPagesTotal: number
 }
 
 export function CampaignSettings({
@@ -23,6 +27,8 @@ export function CampaignSettings({
   intros,
   hasBuiltVideos,
   sampleLead,
+  generatedPages,
+  generatedPagesTotal,
 }: CampaignSettingsProps) {
   return (
     <Tabs defaultValue="general" className="w-full gap-6">
@@ -46,7 +52,12 @@ export function CampaignSettings({
         />
       </TabsContent>
 
-      <TabsContent value="template" className="max-w-none">
+      <TabsContent value="template" className="max-w-none space-y-8">
+        <GeneratedPagesList
+          campaignId={campaign.id}
+          pages={generatedPages}
+          totalCount={generatedPagesTotal}
+        />
         <TemplateEditor
           campaignId={campaign.id}
           initialTemplate={campaign.landing_template}
