@@ -793,7 +793,7 @@ Verified by `npm run verify:deploy` (**15/15** hermetic), `npm test` (**206 test
 
 **Migrations added:** `20260726140000_reconcile_manifest_deploy_rpc.sql`, `20260726140100_pending_site_sync.sql`.
 
-**Not yet applied.** Both migrations are written but unrun in this environment (no local Supabase). `lib/database.types.ts` was hand-edited to match, in the alphabetical positions the generator uses. **Before the production run:** `supabase db push`, then regenerate the types and confirm the diff is empty.
+**Applied.** Both are recorded in `supabase_migrations.schema_migrations` (`20260726140000`, `20260726140100`); `db push` is a no-op after them. Verified against the live schema: `reconcile_manifest_deploy(p_rows jsonb, p_deployed_at timestamptz, p_deploy_id text)` matches the hand-edited `lib/database.types.ts` signature, `delete_campaign_retaining_pages` and `update_campaign_general` both write the `pending_site_sync` marker, and `snapshot_live_pages` covers the widened status set. Regenerating the types should produce an empty diff — worth confirming once, since they were written by hand rather than by the generator.
 
 ---
 
