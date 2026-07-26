@@ -22,6 +22,7 @@
     "verify:page": "tsx scripts/verify-page.ts",
     "verify:landing": "tsx --conditions react-server --env-file-if-exists=.env.local scripts/verify-landing.ts",
     "verify:deploy": "tsx --conditions react-server --env-file-if-exists=.env.local scripts/verify-deploy.ts",
+    "verify:dashboard": "tsx --conditions react-server --env-file-if-exists=.env.local scripts/verify-dashboard.ts",
     "check:urls": "tsx scripts/check-urls.ts",
     "setup:browser": "playwright install chromium",
     "verify:server-only": "tsx scripts/verify-server-only.ts",
