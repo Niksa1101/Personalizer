@@ -750,6 +750,8 @@ CREATE INDEX pending_site_sync_requested_at_idx ON pending_site_sync (requested_
 
 RLS enabled, no policy — service-role only. Written by `delete_campaign_retaining_pages()` and `update_campaign_general()`. Drained by `runSiteSync` after a clean pass, deleting only rows with `requested_at <= ` the instant that pass read the manifest — a marker written *during* a sync describes a change that sync did not see. Boot recovery and the 60 s periodic reconcile enqueue a `site-sync` whenever any row exists.
 
+**Verified end to end** in the Phase 11 artifact (ii) run: both campaign deletes were issued as raw RPC calls with no Redis enqueue, so the reconcile had to find the markers unaided. It did, synced, and cleared them. Note the dirty flag is *transient* — `runSiteSyncPass` clears it before assembling — so polling `pz:deploy:dirty:*` is not a reliable way to observe a pending sync; query this table instead.
+
 ---
 
 ## 6. Indexes
