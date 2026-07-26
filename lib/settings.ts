@@ -181,7 +181,10 @@ async function loadGlobalSettings(): Promise<Partial<SettingValues>> {
   return ttlSettings
 }
 
-function resolveValue<K extends SettingKey>(
+/** Resolve one key against an already-loaded global map — lead → campaign →
+ *  global → seed default. Exported so a caller holding a `resolveMany()` result
+ *  can apply per-row overrides without a round trip per row. */
+export function resolveValue<K extends SettingKey>(
   key: K,
   global: Partial<SettingValues>,
   overrides?: SettingOverrides<K>,
@@ -200,14 +203,6 @@ function resolveValue<K extends SettingKey>(
     `Setting "${key}" missing from DB — falling back to seed default`,
   )
   return SETTING_DEFAULTS[key]
-}
-
-export function resolveValueFromGlobal<K extends SettingKey>(
-  key: K,
-  global: Partial<SettingValues>,
-  overrides?: SettingOverrides<K>,
-): SettingValues[K] {
-  return resolveValue(key, global, overrides)
 }
 
 export async function resolveSetting<K extends SettingKey>(

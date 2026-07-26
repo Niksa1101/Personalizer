@@ -69,7 +69,6 @@ export type DashboardConnectionDeps = {
   clearTimeout: (id: TimerHandle) => void
   setInterval: (fn: () => void, ms: number) => TimerHandle
   clearInterval: (id: TimerHandle) => void
-  now: () => number
   onSnapshot: (snapshot: DashboardSnapshot) => void
   onConnectivity: (connectivity: DashboardConnectivity) => void
   onWarn?: (message: string) => void
@@ -129,7 +128,12 @@ export function createDashboardConnection(
       if (cancelled) return true
       deps.onSnapshot(data)
       snapshotFailures = 0
-      if (connectivity !== "unreachable" && connectivity !== "live") {
+      // A snapshot that arrives IS proof the database is reachable, so this
+      // clears `unreachable` — otherwise the banner outlived the outage and
+      // claimed we couldn't reach the database over visibly fresh numbers.
+      // `live` still wins: a poll landing after the stream recovered must not
+      // demote the indicator.
+      if (connectivity !== "live") {
         setConnectivity("polling")
       }
       return true

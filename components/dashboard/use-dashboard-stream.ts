@@ -46,7 +46,6 @@ export function useDashboardStream(
       clearTimeout,
       setInterval,
       clearInterval,
-      now: () => Date.now(),
       onSnapshot: applySnapshot,
       onConnectivity: setConnectivity,
       onWarn: (message) => console.warn(message),

@@ -38,7 +38,6 @@ function emptySnapshot(): DashboardSnapshot {
 }
 
 type FakeClock = {
-  now: () => number
   timers: Array<{ id: TimerHandle; at: number; fn: () => void; kind: "timeout" | "interval" }>
   nextId: number
   setTimeout: (fn: () => void, ms: number) => TimerHandle
@@ -51,7 +50,6 @@ type FakeClock = {
 function createFakeClock(startMs = 0): FakeClock {
   let currentMs = startMs
   const clock: FakeClock = {
-    now: () => currentMs,
     timers: [],
     nextId: 1,
     setTimeout(fn, ms) {
@@ -152,7 +150,6 @@ describe("createDashboardConnection", () => {
       clearTimeout: clock.clearTimeout,
       setInterval: clock.setInterval,
       clearInterval: clock.clearInterval,
-      now: clock.now,
       onSnapshot: () => {},
       onConnectivity: (state) => connectivity.push(state),
     })
@@ -195,7 +192,6 @@ describe("createDashboardConnection", () => {
       clearTimeout: clock.clearTimeout,
       setInterval: clock.setInterval,
       clearInterval: clock.clearInterval,
-      now: clock.now,
       onSnapshot: () => {},
       onConnectivity: (state) => connectivity.push(state),
     })
@@ -240,7 +236,6 @@ describe("createDashboardConnection", () => {
       clearTimeout: clock.clearTimeout,
       setInterval: clock.setInterval,
       clearInterval: clock.clearInterval,
-      now: clock.now,
       onSnapshot: () => {},
       onConnectivity: (state) => connectivity.push(state),
     })
@@ -286,7 +281,6 @@ describe("createDashboardConnection", () => {
       clearTimeout: globalThis.clearTimeout,
       setInterval: globalThis.setInterval,
       clearInterval: globalThis.clearInterval,
-      now: () => Date.now(),
       onSnapshot: () => {},
       onConnectivity: () => {},
     })
