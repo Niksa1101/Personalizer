@@ -1,3 +1,3 @@
 website,company,first_name,last_name,email,city,country,industry
-https://www.typescriptlang.org,Typescript Handbook Ltd,Anders,Hejlsberg,hello@typescriptlang.org,Redmond,USA,Software
-https://svelte.dev,Svelte Society Group,Rich,Harris,hello@svelte.dev,New York,USA,Software
+https://www.iana.org,Iana Registry Services,John,Curran,hello@iana.org,Los Angeles,USA,Internet Infrastructure
+https://git-scm.com,Git SCM Collective,Junio,Hamano,hello@git-scm.com,Portland,USA,Developer Tools
