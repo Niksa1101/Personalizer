@@ -1,6 +1,7 @@
 import type { Database } from "@/lib/database.types"
 
 export type PipelineStep = Database["public"]["Enums"]["pipeline_step"]
+export type ErrorBucket = Database["public"]["Enums"]["error_bucket"]
 export type ErrorCode = Database["public"]["Enums"]["error_code"]
 export type EventKind = Database["public"]["Enums"]["event_kind"]
 
@@ -9,6 +10,13 @@ export const PIPELINE_STEPS: readonly PipelineStep[] = [
   "merge",
   "page",
   "deploy",
+] as const
+
+/** Single source of truth for every `error_bucket` enum value. */
+export const ERROR_BUCKETS: readonly ErrorBucket[] = [
+  "bad_website",
+  "blocked",
+  "system",
 ] as const
 
 /** Single source of truth for every `error_code` enum value. */

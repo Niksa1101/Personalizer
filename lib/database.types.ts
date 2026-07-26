@@ -875,6 +875,13 @@ export type Database = {
         Args: { p_deploy_id: string; p_deployed_at: string; p_rows: Json }
         Returns: undefined
       }
+      dashboard_counts: {
+        Args: {
+          p_campaign_id?: string | null
+          p_include_archived?: boolean
+        }
+        Returns: Json
+      }
       seed_demo_data: { Args: never; Returns: Json }
       snapshot_live_pages: {
         Args: { p_campaign_lead_ids: string[] }

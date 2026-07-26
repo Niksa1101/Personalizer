@@ -26,12 +26,33 @@ export async function generateMetadata({
 
 type CampaignDetailPageProps = {
   params: Promise<{ id: string }>
+  searchParams: Promise<{ tab?: string }>
+}
+
+const CAMPAIGN_TABS = [
+  "general",
+  "merge",
+  "template",
+  "cta",
+  "recorder",
+] as const
+
+type CampaignTab = (typeof CAMPAIGN_TABS)[number]
+
+function parseCampaignTab(value: string | undefined): CampaignTab {
+  if (value && CAMPAIGN_TABS.includes(value as CampaignTab)) {
+    return value as CampaignTab
+  }
+  return "general"
 }
 
 export default async function CampaignDetailPage({
   params,
+  searchParams,
 }: CampaignDetailPageProps) {
   const { id } = await params
+  const query = await searchParams
+  const activeTab = parseCampaignTab(query.tab)
   const campaign = await getCampaign(id)
 
   if (!campaign) notFound()
@@ -63,15 +84,18 @@ export default async function CampaignDetailPage({
         ) : null}
       </div>
 
-      <CampaignSettings
-        campaign={campaign}
-        slugLocked={slugLocked}
-        intros={intros}
-        hasBuiltVideos={builtVideos}
-        sampleLead={sampleLead}
-        generatedPages={generatedPagesResult.pages}
-        generatedPagesTotal={generatedPagesResult.totalCount}
-      />
+      <Suspense fallback={null}>
+        <CampaignSettings
+          campaign={campaign}
+          slugLocked={slugLocked}
+          intros={intros}
+          hasBuiltVideos={builtVideos}
+          sampleLead={sampleLead}
+          generatedPages={generatedPagesResult.pages}
+          generatedPagesTotal={generatedPagesResult.totalCount}
+          activeTab={activeTab}
+        />
+      </Suspense>
     </div>
   )
 }

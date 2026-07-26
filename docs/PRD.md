@@ -822,11 +822,34 @@ Verified by `npm run verify:deploy` (**15/15** hermetic), `npm test` (**206 test
 
 ---
 
-#### Phase 12 — Dashboard and realtime
+#### Phase 12 — Dashboard and realtime ✅ **DONE** (2026-07-26)
 
-Status tiles with campaign scoping, batch progress with ETA, currently-processing list, failure grouping by bucket, the `Paused – Needs Intro` banner, Realtime subscription with polling fallback.
+**Goal:** the operator's "what is happening" screen — campaign-scoped status tiles, batch progress with ETA, currently-processing list, failure grouping by bucket, the `Paused – Needs Intro` banner, and live updates with a polling fallback.
 
-**Exit:** status changes appear within 2 seconds without a refresh. Killing the socket falls back to polling and recovers. Counts match the database exactly under "All campaigns" and per campaign.
+Shipped: `dashboard_counts()` RPC (`20260726150000_dashboard_counts_rpc.sql`, fixes in `20260726160000_dashboard_counts_fixes.sql`), `lib/dashboard-types.ts` + `lib/dashboard.ts`, server-side Realtime singleton → SSE (`lib/dashboard-stream.ts`, `GET /api/stream/dashboard`), client connection state machine (`lib/dashboard-connection.ts`), dashboard UI (`components/dashboard/*`), deep links to `/leads?…` and `/campaigns/<id>?tab=merge`, controlled campaign settings tabs, `scripts/verify-dashboard.ts`, and `npm run verify:dashboard`.
+
+**Exit — all three met:**
+
+| Criterion | Status | Verified by |
+|---|---|---|
+| Status changes appear within 2 seconds without a refresh | ✅ | `verify:dashboard` SSE leg — DB write → Realtime-pushed frame, measured **928 ms** on the 17/17 run; reported as **skipped** (not passed) without a dev server |
+| Killing the socket falls back to polling and recovers | ✅ | `lib/dashboard-connection.ts` state machine (`live` / `polling` / `unreachable`); `verify:dashboard` polling + reconnect legs **when dev server running**; reported as **skipped** without server |
+| Counts match the database exactly under "All campaigns" and per campaign | ✅ | `verify:dashboard` — per-campaign row-for-row + all-campaigns delta (hermetic DB legs) |
+
+**Review fixes (2026-07-26):** client silence timer now resets on every stream byte (heartbeat comments count as liveness); silence and error paths schedule reconnect; polling stops on stream recovery; Realtime channel status monitored with safety-net re-snapshot; ETA samples campaign-scoped with most-recent ordering; batch headline `complete = done + failed`; verify script uses honest skip state and exercises Realtime on the latency leg.
+
+**Two silent-failure invariants closed during the review**, both of which presented as "Live with frozen numbers":
+
+1. `ensureChannel()` / `ensureResnapshotTimer()` no-op while `subscriberCount()` is 0, so they must run **after** the subscriber is registered. Registering them first meant the *first* stream of a fresh process got no Realtime channel and no safety net at all — the failure only disappeared with a second concurrent client.
+2. A row that changes while the channel is still joining is **never delivered** — Realtime is not a replay log. The channel now schedules a catch-up tick on `SUBSCRIBED`; without it the only recovery was the 15 s safety net, against a 2 s criterion.
+
+**Prerequisite found while verifying:** `20260726170000_ref_padding_no_truncate.sql`. `lpad()` truncates rather than widens past its pad width, so `next_campaign_ref()` collapsed every value in a decade to the same two characters once `campaign_ref_seq` passed 99 — campaign creation failed outright on `campaigns_ref_uk`. `next_lead_ref()` had the identical defect at 10 000 leads. Phase 1's ref-sequence check only ever exercised values below the pad width.
+
+**Deferrals carried forward:** ETA counts down at concurrency 1 while the worker is dead (Phase 14 worker-down indicator); module-scope SSE singleton is single-instance-only; `REPLICA IDENTITY FULL` on `campaign_leads` is unpaid WAL cost; AC-6 dry-run end-to-end still uncovered (Phase 11 inheritance).
+
+**Open item recorded:** `listCampaigns()` still loads every `campaign_leads` row with no pagination (PostgREST 1000-row cap) — same class as Phase 11 review finding 8; `dashboard_counts()` is now one step away from fixing it, deferred intentionally.
+
+Verified by `npm run typecheck`, `npm run lint`, `npm test` (**229 tests**), and `npm run verify:dashboard` — **17/17 with the dev server running**, 1 skipped (the anon-grant leg needs `NEXT_PUBLIC_SUPABASE_ANON_KEY`). Without a dev server the three live legs report **skipped**, not passed, and the run is 14/14.
 
 ---
 

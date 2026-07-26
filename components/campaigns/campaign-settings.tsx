@@ -1,5 +1,7 @@
 "use client"
 
+import { useRouter, useSearchParams } from "next/navigation"
+
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { CtaTab } from "@/components/campaigns/cta-tab"
 import { GeneralTab } from "@/components/campaigns/general-tab"
@@ -19,6 +21,7 @@ type CampaignSettingsProps = {
   sampleLead: SampleLead
   generatedPages: GeneratedPageListItem[]
   generatedPagesTotal: number
+  activeTab: "general" | "merge" | "template" | "cta" | "recorder"
 }
 
 export function CampaignSettings({
@@ -29,9 +32,28 @@ export function CampaignSettings({
   sampleLead,
   generatedPages,
   generatedPagesTotal,
+  activeTab,
 }: CampaignSettingsProps) {
+  const router = useRouter()
+  const searchParams = useSearchParams()
+
   return (
-    <Tabs defaultValue="general" className="w-full gap-6">
+    <Tabs
+      value={activeTab}
+      onValueChange={(value) => {
+        const params = new URLSearchParams(searchParams.toString())
+        if (value === "general") {
+          params.delete("tab")
+        } else {
+          params.set("tab", value)
+        }
+        const query = params.toString()
+        router.replace(
+          query ? `/campaigns/${campaign.id}?${query}` : `/campaigns/${campaign.id}`,
+        )
+      }}
+      className="w-full gap-6"
+    >
       <TabsList className="w-full max-w-3xl">
         <TabsTrigger value="general">General</TabsTrigger>
         <TabsTrigger value="merge">Intro &amp; Merge</TabsTrigger>

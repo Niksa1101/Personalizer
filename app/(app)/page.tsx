@@ -1,22 +1,50 @@
-import { LayoutDashboard } from "lucide-react"
-
-import { EmptyState, PhaseAction } from "@/components/empty-state"
+import { DashboardView } from "@/components/dashboard/dashboard-view"
+import { listCampaigns } from "@/lib/campaigns"
+import {
+  getDashboardSnapshot,
+  parseDashboardScope,
+  scopeKey,
+} from "@/lib/dashboard"
 
 export const metadata = {
   title: "Dashboard",
 }
 
-export default async function DashboardPage() {
+type DashboardPageProps = {
+  searchParams: Promise<{
+    campaign?: string | string[]
+    archived?: string | string[]
+  }>
+}
+
+function firstParam(value: string | string[] | undefined): string | undefined {
+  if (Array.isArray(value)) return value[0]
+  return value
+}
+
+export default async function DashboardPage({ searchParams }: DashboardPageProps) {
+  const params = await searchParams
+  const scopeResult = parseDashboardScope(
+    firstParam(params.campaign),
+    firstParam(params.archived),
+  )
+
+  const scope =
+    "error" in scopeResult
+      ? { campaignId: null, includeArchived: false }
+      : scopeResult
+
+  const [snapshot, campaigns] = await Promise.all([
+    getDashboardSnapshot(scope),
+    listCampaigns({ includeArchived: scope.includeArchived }),
+  ])
+
   return (
-    <div className="flex flex-1 flex-col items-center justify-center p-6">
-      <EmptyState
-        icon={<LayoutDashboard />}
-        title="Create your first campaign"
-        description="Campaigns organize intro videos, merge settings, and landing pages for each batch of leads."
-        action={
-          <PhaseAction label="Create campaign" phase={4} />
-        }
-      />
-    </div>
+    <DashboardView
+      key={scopeKey(scope)}
+      initialSnapshot={snapshot}
+      campaigns={campaigns}
+      scope={scope}
+    />
   )
 }

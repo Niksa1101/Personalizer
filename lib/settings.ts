@@ -142,7 +142,12 @@ function parseSettingValue<K extends SettingKey>(
   }
 }
 
-const loadGlobalSettings = cache(async (): Promise<Partial<SettingValues>> => {
+const SETTINGS_TTL_MS = 5_000
+
+let ttlSettings: Partial<SettingValues> | null = null
+let ttlLoadedAt = 0
+
+const loadGlobalSettingsCached = cache(async (): Promise<Partial<SettingValues>> => {
   const { data, error } = await getSupabaseAdmin()
     .from("settings")
     .select("key, value")
@@ -166,6 +171,16 @@ const loadGlobalSettings = cache(async (): Promise<Partial<SettingValues>> => {
   return resolved
 })
 
+async function loadGlobalSettings(): Promise<Partial<SettingValues>> {
+  const now = Date.now()
+  if (ttlSettings && now - ttlLoadedAt < SETTINGS_TTL_MS) {
+    return ttlSettings
+  }
+  ttlSettings = await loadGlobalSettingsCached()
+  ttlLoadedAt = now
+  return ttlSettings
+}
+
 function resolveValue<K extends SettingKey>(
   key: K,
   global: Partial<SettingValues>,
@@ -185,6 +200,14 @@ function resolveValue<K extends SettingKey>(
     `Setting "${key}" missing from DB — falling back to seed default`,
   )
   return SETTING_DEFAULTS[key]
+}
+
+export function resolveValueFromGlobal<K extends SettingKey>(
+  key: K,
+  global: Partial<SettingValues>,
+  overrides?: SettingOverrides<K>,
+): SettingValues[K] {
+  return resolveValue(key, global, overrides)
 }
 
 export async function resolveSetting<K extends SettingKey>(
