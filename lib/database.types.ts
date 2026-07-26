@@ -581,6 +581,27 @@ export type Database = {
           },
         ]
       }
+      pending_site_sync: {
+        Row: {
+          id: string
+          meta: Json | null
+          reason: string
+          requested_at: string
+        }
+        Insert: {
+          id?: string
+          meta?: Json | null
+          reason: string
+          requested_at?: string
+        }
+        Update: {
+          id?: string
+          meta?: Json | null
+          reason?: string
+          requested_at?: string
+        }
+        Relationships: []
+      }
       pipeline_events: {
         Row: {
           campaign_lead_id: string
@@ -850,6 +871,10 @@ export type Database = {
       next_campaign_ref: { Args: never; Returns: string }
       next_lead_ref: { Args: never; Returns: string }
       normalize_domain: { Args: { raw: string }; Returns: string }
+      reconcile_manifest_deploy: {
+        Args: { p_deploy_id: string; p_deployed_at: string; p_rows: Json }
+        Returns: undefined
+      }
       seed_demo_data: { Args: never; Returns: Json }
       snapshot_live_pages: {
         Args: { p_campaign_lead_ids: string[] }

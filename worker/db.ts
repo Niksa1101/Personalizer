@@ -1,5 +1,7 @@
 import type { Database } from "@/lib/database.types"
+import type { ManifestReconcileRow } from "@/lib/deploy-reconcile"
 import type { SampleLead } from "@/lib/landing-template"
+import { removeIfExists } from "@/lib/local-file"
 import type {
   ErrorCode,
   EventKind,
@@ -558,25 +560,31 @@ export async function updateLeadAfterStepSuccess(input: {
   }
 }
 
-export async function markLeadDeployed(input: {
+export async function markLeadDeployedDryRun(input: {
   campaignLeadId: string
-  netlifyUrl: string
 }): Promise<void> {
-  const now = new Date().toISOString()
-  const { error } = await getSupabaseAdmin()
+  const { data, error } = await getSupabaseAdmin()
     .from("campaign_leads")
     .update({
       status: "deployed",
-      netlify_url: input.netlifyUrl,
-      deployed_at: now,
+      netlify_url: null,
+      deployed_at: null,
+      deployed_dry_run: true,
       attempt_count: 0,
       error_code: null,
       error_detail: null,
     })
     .eq("id", input.campaignLeadId)
+    .select("id")
+    .maybeSingle()
 
   if (error) {
-    throw new Error(`Failed to mark lead deployed: ${error.message}`)
+    throw new Error(`Failed to mark lead dry-run deployed: ${error.message}`)
+  }
+  if (!data) {
+    throw new Error(
+      `Failed to mark lead dry-run deployed: no campaign lead ${input.campaignLeadId}`,
+    )
   }
 }
 
@@ -1064,7 +1072,11 @@ export async function upsertLandingPage(input: {
     const sha1Changed = input.existing.content_sha1 !== input.contentSha1
     const pathChanged = input.existing.path !== input.path
 
-    if (!sha1Changed && !pathChanged) {
+    // An unpublished page whose content still matches would otherwise short-
+    // circuit here and stay out of the manifest forever. Revive it to pending.
+    const unpublished = input.existing.deploy_status === "removed"
+
+    if (!sha1Changed && !pathChanged && !unpublished) {
       return { id: input.existing.id, sha1Changed: false }
     }
 
@@ -1165,4 +1177,342 @@ export async function linkLandingPageToCampaignLead(
       `Failed to link landing page: no campaign lead ${campaignLeadId}`,
     )
   }
+}
+
+export type DeployLandingPageRow = {
+  id: string
+  path: string
+  html: string | null
+  content_sha1: string | null
+  deploy_status: Database["public"]["Enums"]["deploy_status"]
+}
+
+export async function loadDeployLandingPage(
+  campaignLeadId: string,
+): Promise<DeployLandingPageRow | null> {
+  const { data, error } = await getSupabaseAdmin()
+    .from("landing_pages")
+    .select("id, path, html, content_sha1, deploy_status")
+    .eq("campaign_lead_id", campaignLeadId)
+    .maybeSingle()
+
+  if (error) {
+    throw new Error(`Failed to load deploy landing page: ${error.message}`)
+  }
+
+  return data
+}
+
+const ERROR_DETAIL_MAX_BYTES = 4096
+
+function truncateErrorDetail(detail: string): string {
+  if (Buffer.byteLength(detail, "utf8") <= ERROR_DETAIL_MAX_BYTES) {
+    return detail
+  }
+  return detail.slice(0, ERROR_DETAIL_MAX_BYTES)
+}
+
+export async function markLandingPageFailed(input: {
+  pageId: string
+  errorDetail: string
+}): Promise<void> {
+  const { data, error } = await getSupabaseAdmin()
+    .from("landing_pages")
+    .update({
+      deploy_status: "failed",
+      error_detail: truncateErrorDetail(input.errorDetail),
+    })
+    .eq("id", input.pageId)
+    .select("id")
+    .maybeSingle()
+
+  if (error) {
+    throw new Error(`Failed to mark landing page failed: ${error.message}`)
+  }
+  if (!data) {
+    throw new Error(
+      `Failed to mark landing page failed: no landing page ${input.pageId}`,
+    )
+  }
+}
+
+export async function cleanupLocalWebMp4(
+  campaignLeadId: string,
+): Promise<{ removed: boolean; path: string | null }> {
+  const { data, error } = await getSupabaseAdmin()
+    .from("videos")
+    .select("web_path, uploaded_at, web_public_url")
+    .eq("campaign_lead_id", campaignLeadId)
+    .maybeSingle()
+
+  if (error) {
+    throw new Error(`Failed to load video for web.mp4 cleanup: ${error.message}`)
+  }
+  if (
+    !data?.web_path ||
+    data.uploaded_at == null ||
+    data.web_public_url == null
+  ) {
+    return { removed: false, path: data?.web_path ?? null }
+  }
+
+  const webPath = data.web_path
+  await removeIfExists(webPath)
+
+  const { data: updated, error: updateError } = await getSupabaseAdmin()
+    .from("videos")
+    .update({ web_path: null })
+    .eq("campaign_lead_id", campaignLeadId)
+    .select("id")
+    .maybeSingle()
+
+  assertVideoRowTouched(
+    updated,
+    updateError,
+    "null web_path after cleanup",
+    campaignLeadId,
+  )
+
+  return { removed: true, path: webPath }
+}
+
+export async function loadLeadRef(leadId: string): Promise<string> {
+  const { data, error } = await getSupabaseAdmin()
+    .from("leads")
+    .select("ref")
+    .eq("id", leadId)
+    .maybeSingle()
+
+  if (error) {
+    throw new Error(`Failed to load lead ref: ${error.message}`)
+  }
+  if (!data) {
+    throw new Error(`Failed to load lead ref: no lead ${leadId}`)
+  }
+
+  return data.ref
+}
+
+export type ManifestPageRow = {
+  id: string
+  campaign_lead_id: string
+  path: string
+  html: string
+  content_sha1: string
+  deploy_status: Database["public"]["Enums"]["deploy_status"]
+}
+
+export type RetainedPageRow = {
+  id: string
+  path: string
+  html: string
+  content_sha1: string
+}
+
+const MANIFEST_DEPLOY_STATUSES = [
+  "pending",
+  "uploading",
+  "live",
+  "failed",
+] as const satisfies readonly Database["public"]["Enums"]["deploy_status"][]
+
+/**
+ * PostgREST caps a response at 1000 rows by default. The manifest *is* the
+ * desired state of the site, so a truncated read does not merely lag — it
+ * unpublishes every page past the cap. Both manifest reads page explicitly.
+ */
+const MANIFEST_PAGE_SIZE = 500
+
+export async function listManifestPages(): Promise<ManifestPageRow[]> {
+  const rows: ManifestPageRow[] = []
+
+  for (let offset = 0; ; offset += MANIFEST_PAGE_SIZE) {
+    const { data, error } = await getSupabaseAdmin()
+      .from("landing_pages")
+      .select("id, campaign_lead_id, path, html, content_sha1, deploy_status")
+      .in("deploy_status", [...MANIFEST_DEPLOY_STATUSES])
+      .not("html", "is", null)
+      .not("content_sha1", "is", null)
+      .order("id", { ascending: true })
+      .range(offset, offset + MANIFEST_PAGE_SIZE - 1)
+
+    if (error) {
+      throw new Error(`Failed to list manifest pages: ${error.message}`)
+    }
+
+    for (const row of data ?? []) {
+      rows.push({
+        id: row.id,
+        campaign_lead_id: row.campaign_lead_id,
+        path: row.path,
+        html: row.html!,
+        content_sha1: row.content_sha1!,
+        deploy_status: row.deploy_status,
+      })
+    }
+
+    if ((data?.length ?? 0) < MANIFEST_PAGE_SIZE) break
+  }
+
+  return rows
+}
+
+export async function listRetainedPages(): Promise<RetainedPageRow[]> {
+  const rows: RetainedPageRow[] = []
+
+  for (let offset = 0; ; offset += MANIFEST_PAGE_SIZE) {
+    const { data, error } = await getSupabaseAdmin()
+      .from("retained_pages")
+      .select("id, path, html, content_sha1")
+      .order("id", { ascending: true })
+      .range(offset, offset + MANIFEST_PAGE_SIZE - 1)
+
+    if (error) {
+      throw new Error(`Failed to list retained pages: ${error.message}`)
+    }
+
+    rows.push(...(data ?? []))
+    if ((data?.length ?? 0) < MANIFEST_PAGE_SIZE) break
+  }
+
+  return rows
+}
+
+/**
+ * Runs after Netlify is already live, so a row that has since gone is benign —
+ * throwing here would report a successful deploy as a failure. Returns whether
+ * a row was actually removed.
+ */
+export async function deleteRetainedByPath(path: string): Promise<boolean> {
+  const { data, error } = await getSupabaseAdmin()
+    .from("retained_pages")
+    .delete()
+    .eq("path", path)
+    .select("id")
+    .maybeSingle()
+
+  if (error) {
+    throw new Error(`Failed to delete retained page: ${error.message}`)
+  }
+
+  return data != null
+}
+
+export async function repairLandingPageContentSha1(input: {
+  pageId: string
+  contentSha1: string
+}): Promise<void> {
+  const { data, error } = await getSupabaseAdmin()
+    .from("landing_pages")
+    .update({ content_sha1: input.contentSha1 })
+    .eq("id", input.pageId)
+    .select("id")
+    .maybeSingle()
+
+  if (error) {
+    throw new Error(`Failed to repair landing page SHA-1: ${error.message}`)
+  }
+  if (!data) {
+    throw new Error(
+      `Failed to repair landing page SHA-1: no row with id ${input.pageId}`,
+    )
+  }
+}
+
+/**
+ * A count mismatch is benign: the deploy lock does not cover other leads' page
+ * steps, so a row can legitimately move out of pending/failed between the
+ * manifest read and this update. The status filter already makes the write
+ * safe, so report the drift instead of failing a deploy that is proceeding.
+ */
+export async function markLandingPagesUploading(
+  pageIds: string[],
+): Promise<{ expected: number; updated: number }> {
+  if (pageIds.length === 0) return { expected: 0, updated: 0 }
+
+  const { data, error } = await getSupabaseAdmin()
+    .from("landing_pages")
+    .update({ deploy_status: "uploading", error_detail: null })
+    .in("id", pageIds)
+    .in("deploy_status", ["pending", "failed"])
+    .select("id")
+
+  if (error) {
+    throw new Error(`Failed to mark landing pages uploading: ${error.message}`)
+  }
+
+  return { expected: pageIds.length, updated: data?.length ?? 0 }
+}
+
+/**
+ * Durable record that the site needs re-syncing, written inside the same
+ * transaction as the destructive change. Redis is the fast path; this is the
+ * system of record, so a Redis outage cannot strand published pages.
+ */
+export async function hasPendingSiteSync(): Promise<boolean> {
+  const { count, error } = await getSupabaseAdmin()
+    .from("pending_site_sync")
+    .select("id", { count: "exact", head: true })
+
+  if (error) {
+    throw new Error(`Failed to check pending site sync: ${error.message}`)
+  }
+
+  return (count ?? 0) > 0
+}
+
+/**
+ * Clears only markers requested before the deploy that satisfied them — a
+ * marker written *during* a sync describes a change that sync did not see.
+ */
+export async function clearPendingSiteSyncUpTo(
+  requestedAt: string,
+): Promise<number> {
+  const { data, error } = await getSupabaseAdmin()
+    .from("pending_site_sync")
+    .delete()
+    .lte("requested_at", requestedAt)
+    .select("id")
+
+  if (error) {
+    throw new Error(`Failed to clear pending site sync: ${error.message}`)
+  }
+
+  return data?.length ?? 0
+}
+
+/**
+ * One statement for the whole manifest — see the
+ * `reconcile_manifest_deploy` migration for why the status transition is
+ * guarded rather than applied to every lead.
+ */
+export async function reconcileManifestDeployRows(input: {
+  rows: ManifestReconcileRow[]
+  netlifyDeployId: string
+  deployedAt: string
+}): Promise<void> {
+  if (input.rows.length === 0) return
+
+  const { error } = await getSupabaseAdmin().rpc("reconcile_manifest_deploy", {
+    p_rows: input.rows,
+    p_deployed_at: input.deployedAt,
+    p_deploy_id: input.netlifyDeployId,
+  })
+
+  if (error) {
+    throw new Error(`Failed to reconcile manifest deploy: ${error.message}`)
+  }
+}
+
+export async function writeDeployerLog(input: {
+  level: Database["public"]["Enums"]["log_level"]
+  message: string
+  meta?: Record<string, unknown>
+}): Promise<void> {
+  await writeStepLog({
+    scope: "deployer",
+    level: input.level,
+    message: input.message,
+    meta: input.meta,
+  })
 }

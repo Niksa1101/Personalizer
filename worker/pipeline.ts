@@ -9,7 +9,6 @@ import {
   nextPipelineStep,
   PipelineStepError,
   ShutdownError,
-  stubLandingUrl,
   type PipelineStep,
   type StepOutcome,
 } from "@/lib/pipeline-types"
@@ -21,7 +20,6 @@ import {
   closeJobRun,
   insertPipelineEvent,
   loadLeadBase,
-  markLeadDeployed,
   markLeadFailed,
   markLeadPaused,
   openJobRun,
@@ -154,27 +152,6 @@ async function walkSteps(input: {
 
     if (stepResult.outcome) {
       return stepResult.outcome
-    }
-
-    if (step === "deploy") {
-      const url = stubLandingUrl(base.campaign.slug, campaignLead.slug)
-      await insertPipelineEvent({
-        campaignLeadId: campaignLead.id,
-        kind: "deployed",
-        step: "deploy",
-        message: `Deployed to ${url}`,
-      })
-      await insertPipelineEvent({
-        campaignLeadId: campaignLead.id,
-        kind: "note",
-        step: "deploy",
-        message: "Stub deploy — page is not published (Phase 7 placeholder URL).",
-      })
-      await markLeadDeployed({
-        campaignLeadId: campaignLead.id,
-        netlifyUrl: url,
-      })
-      return { kind: "done" }
     }
 
     const nextStep = nextPipelineStep(step)

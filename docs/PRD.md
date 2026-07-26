@@ -477,7 +477,7 @@ No schema changes — `db push` is a no-op.
 
 | Criterion | Result |
 |---|---|
-| A campaign can be created, edited, archived, and deleted | ✅ Create (with slug derivation + auto-suffix uniqueness), General/Merge/Template/CTA/Recorder edits, archive/unarchive, and delete (records only — Phase 11 wires real unpublish, and the delete dialog says so). |
+| A campaign can be created, edited, archived, and deleted | ✅ Create (with slug derivation + auto-suffix uniqueness), General/Merge/Template/CTA/Recorder edits, archive/unarchive, and delete with the retain checkbox + queued unpublish (Phase 11). |
 | Slug uniqueness enforced | ✅ `resolveUniqueSlug` appends `-2, -3, …` on create; edits reject a duplicate with a friendly message, backed by the DB unique constraint (`23505` mapped to "Slug is already in use"). |
 | Slug locked after first deploy | ✅ `firstDeployLocked` (any `campaign_lead` with a `netlify_url`) drives a read-only field and a server-side guard that rejects a changed slug. |
 | Template editor previews against a sample lead with all placeholders substituted | ✅ `substituteTemplate` fills every §5.1.1 token against the campaign's most-recent lead (or the synthetic `SAMPLE_LEAD`), rendered in a `sandbox=""` iframe. Covered by `lib/landing-template.test.ts`. |
@@ -701,13 +701,99 @@ Verified by `npm run verify:page` (hermetic, **19 assertions**), `npm run verify
 
 ---
 
-#### Phase 11 — Deploy
+#### Phase 11 — Deploy 🔄 **IN PROGRESS** (reopened 2026-07-26)
 
 **Goal:** live pages.
 
-Netlify digest deploy with a full manifest (`Tech.md` §10.3), Redis-locked serialization, `deploy_status` tracking, `netlify_url` capture, unpublish-by-omission (which completes the Phase 4 delete prompt), `dry_run` support.
+> **Reopened.** Phase 11 was closed on 2026-07-26 against a green gate, but a review found the exit criterion *"Redeploy 100 leads with one change uploads one file"* was **not met by production code**: `publishManifest()` computed Netlify's `required` digest set and then uploaded the entire manifest anyway (102 PUTs for a one-file change; ~10,200 uploads for a 100-lead batch). The check that "verified" it never called `publishManifest` — `verify:deploy` reimplemented the upload loop and hand-uploaded exactly one file after asserting `required.length === 1`. Sixteen findings in total; all code fixes have landed (see *Review findings* below). **Remaining before re-closing: the production 10-lead run, artifact (ii).**
 
-**Exit:** 10 leads deploy and load at their URLs. A redeploy of 100 leads with one change uploads one file. Deleting a lead with "remove page" checked makes the URL 404. `dry_run` completes the pipeline with zero Netlify calls (**AC-6**).
+~~Netlify digest deploy with a full manifest (`Tech.md` §10.3), Redis-locked serialization, `deploy_status` tracking, `netlify_url` capture, unpublish-by-omission (which completes the Phase 4 delete prompt), `dry_run` support.~~ Implemented across `worker/deploy/{netlify,manifest,lock,sync}.ts`, `worker/steps/deploy.ts`, `lib/not-found-page.ts`, `lib/queue.ts` (`site-sync` queue, dirty flag, manifest cache, `addWithReplace`), `worker/db.ts` (manifest row-source, deploy reconciliation, dry-run markers), `worker/pipeline.ts` (removed `stubLandingUrl`), `worker/recovery.ts` (dirty-flag boot enqueue), `lib/campaigns.ts` + `app/(app)/campaigns/actions.ts` + `components/campaigns/delete-campaign-dialog.tsx` (delete-with-retain RPC + sync enqueue), `components/campaigns/general-tab.tsx` (slug-lock copy), `lib/pipeline-control.ts` (forced `step:deploy`), three migrations (`retained_pages`, `deployed_dry_run`, `deploy.timeout_ms`), `scripts/verify-deploy.ts`, and `scripts/check-urls.ts`.
+
+**Review remediation** adds `lib/deploy-reconcile.ts` (pure reconcile payload), `lib/site-sync.ts` (best-effort enqueue over the durable marker), `worker/deploy/sync.ts` (`planUploads`, mass-removal floor, marker drain), `worker/deploy/manifest.ts` (`detectMassRemoval`), `worker/db.ts` (paginated manifest reads, `pending_site_sync` accessors), and two migrations (`reconcile_manifest_deploy`, `pending_site_sync`).
+
+**Exit — five of six met; artifact (ii) outstanding:**
+
+| Criterion | Status | Verified by |
+|---|---|---|
+| 10 leads deploy and load at their URLs | ⏳ | Production run + `check:urls` (artifact ii — operator-run on live site) |
+| Redeploy 100 leads with one change uploads one file | ✅ | `verify:deploy` — `publishManifest()` driven end to end, `putCount === 1` |
+| Delete with "remove page" checked makes the URL 404 | ⏳ | Production run — lead #1 → **404** (artifact ii) |
+| Delete with box unchecked keeps the page live from `retained_pages` | ⏳ | Production run — lead #2 → **200** retained, body-asserted (artifact ii) |
+| `dry_run` completes the pipeline with zero Netlify calls (**AC-6**) | ⚠️ partial | `verify:deploy` covers dry-run manifest assembly with zero HTTP; the end-to-end `deployed_dry_run=true` + null `netlify_url` assertion needs Supabase and rides on the production run |
+| `typecheck`, `lint`, `test`, `verify:worker`, `verify:deploy` clean; `db push` a no-op after migrations | ✅ | Gate (below) |
+
+**Evidence artifact (i) — `verify:deploy`:**
+
+Hermetic leg (default), **15/15 checks**: loopback guard, remote-http rejection, manifest completeness (`robots.txt` + `404.html`), D32 live-wins, duplicate-path throw, dry-run manifest assembly with zero HTTP, initial publish, unpublish-by-omission, **100 pages / 1 change → exactly one PUT (through `publishManifest`)**, **D34 duplicate digest → one PUT per path**, malformed `/files` → `previous_paths: unknown`, removal-guard cold-cache seed with no phantom removals, removal-guard detection of a real unpublish, mass-removal floor, deploy lock serialization.
+
+The one-PUT and D34 checks now call production `publishManifest()`; the fake rejects any PUT whose digest was not in `required` (422), so a regression cannot pass. Confirmed by reverting `planUploads`' filter locally: 4 unit tests fail and the hermetic leg dies on the first non-required PUT.
+
+Real leg (`DEPLOY_REAL=1 NETLIFY_TEST_SITE_ID=<scratch-site>`): two fixture pages → 200 + `noindex`; Redis cache delete → D86 seeded previous set; redeploy of the identical manifest → **zero uploads**; live `/files` paths asserted rooted (the removal-guard comparability invariant, finding 9); teardown via empty `buildManifest()` → pages 404, `robots.txt` 200 with `Disallow: /`.
+
+**Evidence artifact (ii) — production 10-lead run:**
+
+Disposable campaign on the **production** Netlify site (not the scratch site). Import 10 leads, assign an intro, resume to `deployed`. Then:
+
+1. Delete lead **#1** with **"Also remove the published landing page(s)" checked** → URL 404s after `site-sync`.
+2. Delete lead **#2** with the box **unchecked** → URL stays **200** from a `retained_pages` row (no `campaign_lead` remains).
+3. One `check:urls` invocation over all 10 original URLs → **8 × 200, 1 × 404, 1 × 200-from-retained**. Pages stay live for Phase 18 AC-2.
+
+`check:urls` does not follow redirects (a 301 is not the page under test), and takes an optional `:<body-substring>` so the retained page is proven to be *the retained snapshot* rather than a page the delete simply missed — pass something unique to lead #2 (its business name):
+
+```bash
+npm run check:urls -- \
+  https://{site}.netlify.app/{campaign}/{lead-3} 200 \
+  ... \
+  https://{site}.netlify.app/{campaign}/{lead-1} 404 \
+  https://{site}.netlify.app/{campaign}/{lead-2} 200:{lead-2-business-name}
+```
+
+4. Confirm in the deployer log that the final deploy reports `uploaded_count` far below `manifest_file_count` — that field is the production proof that finding 1 is fixed.
+
+Verified by `npm run verify:deploy` (**15/15** hermetic), `npm test` (**206 tests**), and the production run above.
+
+#### Review findings (Phase 11)
+
+1. **`deploy_status='removed'` reserved** — enum value ships unused; unpublish is manifest omission only. Phase 13 adds the per-page UI action; mechanism is complete (`DB.md` §2.5).
+2. **`retained_pages` escape hatch** — no in-app removal; operator deletes the row then triggers `site-sync` (`Tech.md` §17 item 9).
+3. **Three schema migrations** — `20260726130000_retained_pages.sql`, `20260726130100_campaign_leads_dry_run_deploy.sql`, `20260726130200_deploy_timeout_setting.sql`. Applied; `db push` is a no-op after them.
+4. **Phase 4 delete dialog** — checkbox checked by default; real unpublish via `delete_campaign_retaining_pages` + `enqueueSiteSync`; copy reports "Removal queued…".
+
+#### Second review (2026-07-26) — 16 findings, plus 2 found while fixing them; all resolved in code
+
+**Blocking**
+
+1. **`publishManifest` ignored `deploy.required`** — uploaded every manifest file on every deploy, violating `Tech.md` §10.3 and the "one change = one upload" exit criterion. Fixed by the pure `planUploads()` in `worker/deploy/sync.ts`; the completion log's `required_count` (which reported the *total* manifest size, masking the bug) is now `manifest_file_count` / `required_count` / `uploaded_count`.
+2. **The evidence never ran production code** — `verify:deploy` reimplemented the upload loop and hand-uploaded one file. It now drives `publishManifest()`; the fake 422s any non-required PUT; `worker/deploy/sync.test.ts` covers `planUploads` including D34.
+
+**Important**
+
+3. **Cross-lead state clobbering + O(N²) reconcile** — the per-lead UPDATE loop force-wrote `status='deployed'` on every manifest lead, resetting leads mid-re-record and undoing Phase 15's `Deployed → Ready` promotion. Replaced by the `reconcile_manifest_deploy` RPC: one statement, status transition guarded to `(processing AND current_step='deploy') OR deployed`.
+4. **Removal guard budget** — a fixed 5 s × 3 while waiting for a full Netlify deploy, so any real removal failed the triggering lead. Now polls the manifest cache for a new deploy id, budgeted from `deploy.timeout_ms`.
+5. **Failed `site-sync` never retried until reboot** — the job now has `attempts: 5` + exponential backoff, and the `failed` listener re-enqueues once attempts are exhausted.
+6. **Redis outage during delete stranded published pages** — `enqueueSiteSync` threw before setting the dirty flag, and boot recovery gated on that flag. `delete_campaign_retaining_pages` and `update_campaign_general` now write a `pending_site_sync` row in the same transaction; boot **and** the 60 s periodic reconcile drain it. Redis is only the fast path (`lib/site-sync.ts`).
+7. **Post-deploy bookkeeping reported as deploy failure** — a 0-row `deleteRetainedByPath` or a row-count drift in `markLandingPagesUploading` failed a deploy that was already live. Both are now benign-and-logged, and a reconcile error after publish flags the site dirty instead of marking a serving page `failed`.
+8. **Unpaginated manifest reads** — PostgREST's 1000-row cap would have silently *unpublished* everything past it. Both reads now page; `detectMassRemoval()` refuses a manifest that drops >50 % of a site of 20+ pages.
+9. **Cold-cache seed path format** — `listSiteFiles()` now normalizes to a single leading slash, so a differently-shaped Netlify response cannot read as "everything removed". Asserted hermetically and in the real leg.
+
+**Minor**
+
+10. `cachedSiteUrl` was a process-wide memo not keyed by site — now `Map<siteId, url>`.
+11. `markLeadDeployed` was dead after the Phase 7 stub was removed — deleted.
+12. `check:urls` followed redirects, so a 301 could pass the 200 + `noindex` check — now `redirect: "manual"`, reporting the `Location`. It also sets `process.exitCode` rather than calling `process.exit()`, which aborted libuv mid-fetch on Windows and corrupted the pasted evidence.
+13. `check:urls` could not tell a retained 200 from a missed delete — optional `:<body-substring>` added.
+14. `snapshot_live_pages` retained only `deploy_status='live'`, so unchecking the box on a campaign whose rows lagged the site retained nothing. Widened to the manifest-eligible set.
+15. Three tautological `verify:deploy` checks re-pointed at real behaviour (cold-cache seeding, real removal detection, mass-removal floor, zero-upload redeploy); the fake Redis `eval` now dispatches on script text rather than argument arity.
+16. **Latent Phase 13 trap** — `deploy_status='removed'` is outside `MANIFEST_DEPLOY_STATUSES`, so once the unpublish button ships such a lead would deploy "successfully" while never reaching `deployed`. `detectStaleReason` now treats `removed` as stale, `upsertLandingPage` revives it, and the deploy step fails loudly if the trigger lead's page is absent from the manifest.
+
+**Found while fixing the above**
+
+17. **A campaign slug change or delete hung forever with Redis down.** ioredis reconnects indefinitely by default, so `enqueueSiteSync()` neither resolved nor rejected — the `try/catch` around it could never fire, because a `catch` cannot rescue a promise that never settles. `verify:landing` hung on this too (it was previously green only because the slug-change enqueue had not yet been added). `requestSiteSync` now bounds the wait at 3 s; the durable marker makes losing the enqueue harmless.
+18. **`verify:landing` never exited.** Once anything constructs the shared ioredis client, its reconnect loop keeps the event loop alive. The script now calls `closeQueueConnections()` and sets `process.exitCode` instead of relying on process teardown.
+
+**Migrations added:** `20260726140000_reconcile_manifest_deploy_rpc.sql`, `20260726140100_pending_site_sync.sql`.
+
+**Not yet applied.** Both migrations are written but unrun in this environment (no local Supabase). `lib/database.types.ts` was hand-edited to match, in the alphabetical positions the generator uses. **Before the production run:** `supabase db push`, then regenerate the types and confirm the diff is empty.
 
 ---
 
@@ -726,6 +812,10 @@ Status tiles with campaign scoping, batch progress with ETA, currently-processin
 #### Phase 13 — Leads table and drawer
 
 TanStack table per §6.3, all filters and sorts, bulk actions, and the full detail drawer including timeline, both players, per-step retry, and error display with screenshots.
+
+**Also ships (deferred UI from Phase 11):** per-page unpublish action setting `deploy_status='removed'` and enqueueing `site-sync` — the manifest omission mechanism shipped in Phase 11; Phase 13 adds the button only. Lead-level delete with the retain checkbox via a sibling RPC over `snapshot_live_pages()` (`delete_campaign_retaining_pages` pattern, D87).
+
+> The sibling delete RPC **must** write a `pending_site_sync` row in its own transaction, exactly as the campaign-level one does (`DB.md` §5.15) — otherwise it reintroduces the Redis-outage hole closed by Phase 11 review finding 6. Re-publishing an unpublished page is already handled: `deploy_status='removed'` reads as stale to the deploy step (`DB.md` §2.5).
 
 **Exit:** 500 rows filter and sort without lag. The drawer plays both videos. Per-step retry re-runs exactly that step. Editing a lead's URL and re-queuing works end to end.
 

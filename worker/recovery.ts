@@ -1,11 +1,15 @@
 import {
   enqueueLead,
+  enqueueSiteSync,
   getLeadJobState,
+  isDeployDirty,
   scanLiveWorkers,
 } from "@/lib/queue"
 import type { PipelineStep } from "@/lib/pipeline-types"
+
 import {
   closeJobRun,
+  hasPendingSiteSync,
   insertPipelineEvent,
   listOpenJobRuns,
   listRecoverableLeads,
@@ -90,8 +94,31 @@ export async function reconcile(opts?: { graceMs?: number }): Promise<void> {
   }
 }
 
+/**
+ * Two independent signals that the site is behind the database: the Redis dirty
+ * flag (fast, lost on a Redis wipe) and the durable pending_site_sync markers
+ * written in-transaction with the destructive change (survive anything).
+ */
+export async function reconcileSiteSync(): Promise<void> {
+  try {
+    const [dirty, pending] = await Promise.all([
+      isDeployDirty(),
+      hasPendingSiteSync(),
+    ])
+    if (!dirty && !pending) return
+
+    const landed = await enqueueSiteSync()
+    if (!landed) {
+      console.debug("[recovery] site-sync enqueue skipped (job locked)")
+    }
+  } catch (error) {
+    console.error("[recovery] site-sync enqueue failed:", error)
+  }
+}
+
 export async function runBootRecovery(): Promise<void> {
   await reconcile()
+  await reconcileSiteSync()
 }
 
 export function startPeriodicReconcile(): () => void {
@@ -105,6 +132,7 @@ export function startPeriodicReconcile(): () => void {
 
     running = true
     void reconcile({ graceMs: PERIODIC_GRACE_MS })
+      .then(() => reconcileSiteSync())
       .catch((error) => {
         console.error("[recovery] periodic reconcile failed:", error)
       })

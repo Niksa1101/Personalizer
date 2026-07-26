@@ -5,6 +5,7 @@ import { toast } from "sonner"
 
 import { deleteCampaignAction } from "@/app/(app)/campaigns/actions"
 import { Button } from "@/components/ui/button"
+import { Checkbox } from "@/components/ui/checkbox"
 import {
   Dialog,
   DialogClose,
@@ -14,6 +15,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
+import { Label } from "@/components/ui/label"
 
 type DeleteCampaignDialogProps = {
   campaign: { id: string; name: string } | null
@@ -27,12 +29,13 @@ export function DeleteCampaignDialog({
   onOpenChange,
 }: DeleteCampaignDialogProps) {
   const [busy, setBusy] = useState(false)
+  const [removePages, setRemovePages] = useState(true)
 
   async function handleDelete() {
     if (!campaign) return
     setBusy(true)
     try {
-      await deleteCampaignAction(campaign.id)
+      await deleteCampaignAction(campaign.id, removePages)
     } catch {
       toast.error("Could not delete campaign")
       setBusy(false)
@@ -41,16 +44,35 @@ export function DeleteCampaignDialog({
   }
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog
+      open={open}
+      onOpenChange={(nextOpen) => {
+        if (!nextOpen) setRemovePages(true)
+        onOpenChange(nextOpen)
+      }}
+    >
       <DialogContent>
         <DialogHeader>
           <DialogTitle>Delete {campaign?.name}?</DialogTitle>
           <DialogDescription>
-            Also remove the published landing page(s)? This deletes database
-            records only — published pages stay live until Phase 11 wires real
-            unpublish.
+            This permanently deletes the campaign and its database records. If
+            the worker is offline, published page changes are queued until it
+            runs again.
           </DialogDescription>
         </DialogHeader>
+
+        <div className="flex items-start gap-3 py-1">
+          <Checkbox
+            id="remove-published-pages"
+            checked={removePages}
+            disabled={busy}
+            onCheckedChange={(value) => setRemovePages(value === true)}
+          />
+          <Label htmlFor="remove-published-pages" className="leading-snug">
+            Also remove the published landing page(s)
+          </Label>
+        </div>
+
         <DialogFooter>
           <DialogClose render={<Button variant="outline" disabled={busy} />}>
             Cancel

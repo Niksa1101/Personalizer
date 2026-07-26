@@ -1,11 +1,13 @@
 import "server-only"
 
-import { Queue } from "bullmq"
+import { Queue, type JobsOptions } from "bullmq"
 import Redis from "ioredis"
 
 import { assertEnv } from "@/lib/env"
 
 export const PIPELINE_QUEUE_NAME = "pipeline"
+export const SITE_SYNC_QUEUE_NAME = "site-sync"
+export const SITE_SYNC_JOB_ID = "site-sync"
 
 const LIVENESS_PREFIX = "pz:worker:alive:"
 const LIVENESS_TTL_SECONDS = 15
@@ -13,6 +15,7 @@ const LIVENESS_REFRESH_MS = 5_000
 
 let redis: Redis | null = null
 let queue: Queue | null = null
+let siteSyncQueue: Queue | null = null
 
 export function getRedis(): Redis {
   if (redis) return redis
@@ -51,9 +54,106 @@ export function getQueue(): Queue {
   return queue
 }
 
+export function getSiteSyncQueue(): Queue {
+  if (siteSyncQueue) return siteSyncQueue
+
+  siteSyncQueue = new Queue(SITE_SYNC_QUEUE_NAME, {
+    connection: getRedis(),
+  })
+
+  return siteSyncQueue
+}
+
 async function ensureQueueReady(): Promise<Queue> {
   await ensureRedisConnected()
   return getQueue()
+}
+
+async function ensureSiteSyncQueueReady(): Promise<Queue> {
+  await ensureRedisConnected()
+  return getSiteSyncQueue()
+}
+
+function deployDirtyKey(siteId?: string): string {
+  const resolvedSiteId = siteId ?? assertEnv().NETLIFY_SITE_ID
+  return `pz:deploy:dirty:${resolvedSiteId}`
+}
+
+export function manifestCacheKey(siteId?: string): string {
+  const resolvedSiteId = siteId ?? assertEnv().NETLIFY_SITE_ID
+  return `pz:deploy:manifest:${resolvedSiteId}`
+}
+
+export type ManifestCacheEntry = {
+  sha: string
+  deploy_id: string
+  at: string
+  paths: string[]
+}
+
+export async function setDeployDirty(siteId?: string): Promise<void> {
+  await ensureRedisConnected()
+  await getRedis().set(deployDirtyKey(siteId), "1")
+}
+
+export async function clearDeployDirty(siteId?: string): Promise<void> {
+  await ensureRedisConnected()
+  await getRedis().del(deployDirtyKey(siteId))
+}
+
+/** Redis read errors count as dirty (D54). */
+export async function isDeployDirty(siteId?: string): Promise<boolean> {
+  try {
+    await ensureRedisConnected()
+    const value = await getRedis().get(deployDirtyKey(siteId))
+    return value != null
+  } catch {
+    return true
+  }
+}
+
+export async function getManifestCache(
+  siteId?: string,
+): Promise<ManifestCacheEntry | null> {
+  try {
+    await ensureRedisConnected()
+    const raw = await getRedis().get(manifestCacheKey(siteId))
+    if (!raw) return null
+    return JSON.parse(raw) as ManifestCacheEntry
+  } catch {
+    return null
+  }
+}
+
+export async function setManifestCache(
+  entry: ManifestCacheEntry,
+  siteId?: string,
+): Promise<void> {
+  await ensureRedisConnected()
+  await getRedis().set(manifestCacheKey(siteId), JSON.stringify(entry))
+}
+
+async function addWithReplace(
+  q: Queue,
+  jobId: string,
+  name: string,
+  data: unknown,
+  opts: JobsOptions,
+): Promise<boolean> {
+  let removable = true
+  try {
+    await q.remove(jobId)
+  } catch {
+    // Locked — the following add with the same jobId will no-op.
+    removable = false
+  }
+
+  await q.add(name, data, {
+    ...opts,
+    jobId,
+  })
+
+  return removable
 }
 
 export type LeadJobState =
@@ -86,7 +186,7 @@ export async function getLeadJobState(
 }
 
 /**
- * The ONLY place queue.add is called. See docs/Tech.md §7.1.
+ * The two queue.add callers share addWithReplace(). See docs/Tech.md §7.1.
  * Returns false when the prior remove failed because the job is locked —
  * BullMQ then silently drops the add with the same jobId.
  */
@@ -94,28 +194,44 @@ export async function enqueueLead(
   campaignLeadId: string,
   opts?: { delayMs?: number },
 ): Promise<boolean> {
-  const q = await ensureQueueReady()
-
-  let removable = true
-  try {
-    await q.remove(campaignLeadId)
-  } catch {
-    // Locked — the following add with the same jobId will no-op.
-    removable = false
-  }
-
-  await q.add(
+  return addWithReplace(
+    await ensureQueueReady(),
+    campaignLeadId,
     "process-lead",
     { campaignLeadId },
     {
-      jobId: campaignLeadId,
       delay: opts?.delayMs,
       removeOnComplete: 100,
       removeOnFail: false,
     },
   )
+}
 
-  return removable
+const SITE_SYNC_ATTEMPTS = 5
+const SITE_SYNC_BACKOFF_MS = 10_000
+
+/**
+ * A dropped site-sync leaves deleted pages published, so the job retries on its
+ * own rather than waiting for the next worker boot. The `failed` listener still
+ * re-enqueues once attempts are exhausted and the dirty flag is set.
+ */
+export async function enqueueSiteSync(opts?: {
+  delayMs?: number
+}): Promise<boolean> {
+  await setDeployDirty()
+  return addWithReplace(
+    await ensureSiteSyncQueueReady(),
+    SITE_SYNC_JOB_ID,
+    "site-sync",
+    {},
+    {
+      delay: opts?.delayMs,
+      attempts: SITE_SYNC_ATTEMPTS,
+      backoff: { type: "exponential", delay: SITE_SYNC_BACKOFF_MS },
+      removeOnComplete: true,
+      removeOnFail: false,
+    },
+  )
 }
 
 function livenessKey(workerId: string): string {
@@ -178,6 +294,10 @@ export async function closeQueueConnections(): Promise<void> {
   if (queue) {
     await queue.close()
     queue = null
+  }
+  if (siteSyncQueue) {
+    await siteSyncQueue.close()
+    siteSyncQueue = null
   }
   if (redis) {
     await redis.quit()

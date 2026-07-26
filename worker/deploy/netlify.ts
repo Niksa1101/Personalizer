@@ -9,7 +9,8 @@ const BASE_BACKOFF_MS = 1_000
 
 const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "::1"])
 
-let cachedSiteUrl: string | null = null
+/** Keyed by site — an unkeyed memo hands one site's URL to a client for another. */
+const cachedSiteUrls = new Map<string, string>()
 
 export class NetlifyError extends Error {
   readonly status: number
@@ -174,6 +175,17 @@ function sha1Hex(bytes: Buffer | Uint8Array): string {
   return createHash("sha1").update(bytes).digest("hex")
 }
 
+/**
+ * The removal guard diffs this listing against manifest keys, which always
+ * carry a leading slash. If Netlify ever reports `campaign/lead/index.html`
+ * instead of `/campaign/lead/index.html`, an unnormalized compare reads every
+ * path as removed and fails every lead after a cache loss. Normalize on the way
+ * in so the two sets are always comparable.
+ */
+export function normalizeSiteFilePath(path: string): string {
+  return `/${path.replace(/^\/+/, "")}`
+}
+
 export function createNetlifyClient(
   options: NetlifyClientOptions = {},
 ): NetlifyClient {
@@ -307,7 +319,8 @@ export function createNetlifyClient(
   }
 
   async function getSiteUrl(): Promise<string> {
-    if (cachedSiteUrl) return cachedSiteUrl
+    const cached = cachedSiteUrls.get(siteId)
+    if (cached) return cached
 
     const response = await netlifyFetch(
       `${apiBase}/sites/${siteId}`,
@@ -323,8 +336,9 @@ export function createNetlifyClient(
       )
     }
 
-    cachedSiteUrl = body.ssl_url.replace(/\/$/, "")
-    return cachedSiteUrl
+    const siteUrl = body.ssl_url.replace(/\/$/, "")
+    cachedSiteUrls.set(siteId, siteUrl)
+    return siteUrl
   }
 
   async function listSiteFiles(): Promise<string[] | null> {
@@ -346,7 +360,7 @@ export function createNetlifyClient(
         ) {
           return null
         }
-        paths.push((entry as { path: string }).path)
+        paths.push(normalizeSiteFilePath((entry as { path: string }).path))
       }
       return paths
     } catch {
@@ -355,7 +369,7 @@ export function createNetlifyClient(
   }
 
   function resetSiteUrlCache(): void {
-    cachedSiteUrl = null
+    cachedSiteUrls.delete(siteId)
   }
 
   return {
@@ -368,9 +382,9 @@ export function createNetlifyClient(
   }
 }
 
-/** Test-only: clears the process-wide site URL memo. */
+/** Test-only: clears the site URL memo for every site. */
 export function resetNetlifySiteUrlCache(): void {
-  cachedSiteUrl = null
+  cachedSiteUrls.clear()
 }
 
 /** Test-only: validates NETLIFY_API_BASE without constructing a client. */

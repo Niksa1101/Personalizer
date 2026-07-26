@@ -19,6 +19,7 @@ import {
   SAMPLE_LEAD,
   type SampleLead,
 } from "@/lib/landing-template"
+import { requestSiteSync } from "@/lib/site-sync"
 import { slugFromName, SLUG_REGEX } from "@/lib/slug"
 import { resolveMany } from "@/lib/settings"
 import { getSupabaseAdmin } from "@/lib/supabase"
@@ -87,7 +88,7 @@ export async function resolveUniqueSlug(
   return candidate
 }
 
-/** D9 — slug locks after any campaign_lead has a published netlify_url. */
+/** D9/D52 — slug locks after first deploy or when retained pages exist for this campaign ref. */
 export async function firstDeployLocked(campaignId: string): Promise<boolean> {
   const { count, error } = await getSupabaseAdmin()
     .from("campaign_leads")
@@ -99,7 +100,29 @@ export async function firstDeployLocked(campaignId: string): Promise<boolean> {
     throw new Error(`Failed to check deploy lock: ${error.message}`)
   }
 
-  return (count ?? 0) > 0
+  if ((count ?? 0) > 0) return true
+
+  const { data: campaign, error: campaignError } = await getSupabaseAdmin()
+    .from("campaigns")
+    .select("ref")
+    .eq("id", campaignId)
+    .maybeSingle()
+
+  if (campaignError) {
+    throw new Error(`Failed to load campaign ref: ${campaignError.message}`)
+  }
+  if (!campaign) return false
+
+  const { count: retainedCount, error: retainedError } = await getSupabaseAdmin()
+    .from("retained_pages")
+    .select("id", { count: "exact", head: true })
+    .eq("campaign_ref", campaign.ref)
+
+  if (retainedError) {
+    throw new Error(`Failed to check retained pages: ${retainedError.message}`)
+  }
+
+  return (retainedCount ?? 0) > 0
 }
 
 function aggregateStatusCounts(
@@ -233,6 +256,12 @@ export async function updateCampaignGeneral(
     throw new Error(`Failed to update campaign: ${rpcError.message}`)
   }
 
+  if (slugChanged) {
+    // update_campaign_general() writes the pending_site_sync marker in the same
+    // transaction as the path rewrite; this is only the fast path.
+    await requestSiteSync({ campaign_id: id, slug: input.slug })
+  }
+
   const updated = await getCampaign(id)
   if (!updated) {
     throw new Error("Campaign not found")
@@ -336,13 +365,21 @@ export async function unarchiveCampaign(id: string): Promise<CampaignRow> {
   return data
 }
 
-export async function deleteCampaign(id: string): Promise<void> {
-  const { error } = await getSupabaseAdmin()
-    .from("campaigns")
-    .delete()
-    .eq("id", id)
+export async function deleteCampaign(
+  id: string,
+  retainPages = false,
+): Promise<void> {
+  const { error } = await getSupabaseAdmin().rpc("delete_campaign_retaining_pages", {
+    p_campaign_id: id,
+    p_retain: retainPages,
+  })
 
-  if (error) throw new Error(`Failed to delete campaign: ${error.message}`)
+  if (error) {
+    if (error.message.includes("campaign not found")) {
+      throw new Error("Campaign not found")
+    }
+    throw new Error(`Failed to delete campaign: ${error.message}`)
+  }
 }
 
 export async function listIntroVideos(): Promise<IntroVideoOption[]> {

@@ -14,6 +14,7 @@ import {
 import type { Database } from "../lib/database.types"
 import { assertEnvOrExit } from "../lib/env-node"
 import { DEFAULT_LANDING_TEMPLATE } from "../lib/landing-template"
+import { closeQueueConnections } from "../lib/queue"
 import { loadPageContext } from "../worker/db"
 import { runPageGenerate } from "../worker/page/generate"
 import type { StepContext } from "../worker/steps/shared"
@@ -362,12 +363,15 @@ async function main(): Promise<void> {
   const failed = results.filter((result) => !result.ok)
   console.log(`\n${results.length - failed.length}/${results.length} checks passed`)
 
-  if (failed.length > 0) {
-    process.exit(1)
-  }
+  // updateCampaignGeneral() nudges the site-sync queue, which constructs the
+  // shared ioredis client. Its reconnect loop keeps the event loop alive, so
+  // the script must close it or it never exits (with or without Redis running).
+  await closeQueueConnections().catch(() => undefined)
+
+  process.exitCode = failed.length > 0 ? 1 : 0
 }
 
 main().catch((error) => {
   console.error("verify:landing fatal:", error)
-  process.exit(1)
+  process.exitCode = 1
 })

@@ -23,6 +23,7 @@ import {
   updateCampaignTemplateSchema,
   unarchiveCampaign,
 } from "@/lib/campaigns"
+import { requestSiteSync } from "@/lib/site-sync"
 
 export type CampaignActionState = {
   error?: string
@@ -272,9 +273,16 @@ export async function unarchiveCampaignAction(
   revalidatePath(`/campaigns/${campaignId}`)
 }
 
-export async function deleteCampaignAction(campaignId: string): Promise<void> {
+export async function deleteCampaignAction(
+  campaignId: string,
+  removePages: boolean,
+): Promise<void> {
   await verifySession()
-  await deleteCampaign(campaignId)
+  // The RPC writes a pending_site_sync marker in the same transaction as the
+  // delete, so the sync cannot be lost. Redis is only the fast path here.
+  await deleteCampaign(campaignId, !removePages)
+  await requestSiteSync({ campaign_id: campaignId, remove_pages: removePages })
+
   revalidatePath("/campaigns")
   redirect("/campaigns?toast=deleted")
 }

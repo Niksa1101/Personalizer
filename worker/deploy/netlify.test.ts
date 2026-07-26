@@ -6,6 +6,7 @@ import { resetEnvCache } from "@/lib/env"
 import {
   createNetlifyClient,
   NetlifyError,
+  normalizeSiteFilePath,
   resetNetlifySiteUrlCache,
   validateNetlifyApiBase,
 } from "@/worker/deploy/netlify"
@@ -194,5 +195,31 @@ describe("netlify client against fake server", () => {
     assert.equal(fake.putCount, 1)
 
     await fake.close()
+  })
+})
+
+describe("normalizeSiteFilePath", () => {
+  it("leaves an already-rooted path alone", () => {
+    assert.equal(
+      normalizeSiteFilePath("/acme/lead-1/index.html"),
+      "/acme/lead-1/index.html",
+    )
+  })
+
+  it("roots a path Netlify reports without a leading slash", () => {
+    assert.equal(
+      normalizeSiteFilePath("acme/lead-1/index.html"),
+      "/acme/lead-1/index.html",
+    )
+  })
+
+  it("collapses repeated leading slashes", () => {
+    assert.equal(normalizeSiteFilePath("///robots.txt"), "/robots.txt")
+  })
+
+  it("agrees with manifest keys either way (the removal-guard invariant)", () => {
+    const manifestKey = "/acme/lead-1/index.html"
+    assert.equal(normalizeSiteFilePath(manifestKey), manifestKey)
+    assert.equal(normalizeSiteFilePath(manifestKey.slice(1)), manifestKey)
   })
 })

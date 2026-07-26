@@ -63,10 +63,6 @@ export class PipelineStepError extends Error {
   }
 }
 
-export function stubLandingUrl(campaignSlug: string, leadSlug: string): string {
-  return `https://stub.invalid/${campaignSlug}/${leadSlug}`
-}
-
 /** Structured extras on pipeline_events.meta — consumed by Phase 13 drawer. */
 export type PipelineEventMeta = {
   attempt?: number
