@@ -1,3 +1,3 @@
 website,company,first_name,last_name,email,city,country,industry
-https://vuejs.org,Vuejs Retained Fixture Co,Evan,You,hello@vuejs.org,Singapore,Singapore,Software
-https://astro.build,Astro Retained Fixture Co,Fred,Schott,hello@astro.build,Seattle,USA,Software
+https://www.perl.org,Perl Retained Fixture Co,Larry,Wall,hello@perl.org,Mountain View,USA,Software
+https://www.openbsd.org,Openbsd Retained Fixture Co,Theo,Raadt,hello@openbsd.org,Calgary,Canada,Operating Systems
