@@ -1,0 +1,11 @@
+website,company,first_name,last_name,email,city,country,industry
+https://www.python.org,Python Software Foundation,Guido,Rossum,hello@python.org,Wilmington,USA,Software
+https://www.postgresql.org,PostgreSQL Global Group,Magnus,Hagander,hello@postgresql.org,Stockholm,Sweden,Databases
+https://www.rust-lang.org,Rust Foundation,Niko,Matsakis,hello@rust-lang.org,Portland,USA,Software
+https://go.dev,Go Language Team,Russ,Cox,hello@go.dev,Mountain View,USA,Software
+https://nodejs.org,Node.js Foundation,Matteo,Collina,hello@nodejs.org,San Francisco,USA,Software
+https://sqlite.org,SQLite Consortium,Richard,Hipp,hello@sqlite.org,Charlotte,USA,Databases
+https://curl.se,Curl Project,Daniel,Stenberg,hello@curl.se,Stockholm,Sweden,Networking
+https://neovim.io,Neovim Collective,Justin,Keyes,hello@neovim.io,Austin,USA,Developer Tools
+https://www.debian.org,Debian Project,Jonathan,Carter,hello@debian.org,Cape Town,South Africa,Operating Systems
+https://www.kernel.org,Linux Kernel Archives,Greg,Hartman,hello@kernel.org,Portland,USA,Operating Systems

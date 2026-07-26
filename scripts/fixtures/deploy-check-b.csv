@@ -1,0 +1,3 @@
+website,company,first_name,last_name,email,city,country,industry
+https://www.typescriptlang.org,Typescript Handbook Ltd,Anders,Hejlsberg,hello@typescriptlang.org,Redmond,USA,Software
+https://svelte.dev,Svelte Society Group,Rich,Harris,hello@svelte.dev,New York,USA,Software
