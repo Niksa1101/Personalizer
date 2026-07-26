@@ -14,16 +14,23 @@ import { sweepStaleRecorderTemps } from "../lib/local-file"
 import {
   closeQueueConnections,
   deleteLiveness,
-  PIPELINE_QUEUE_NAME,
   enqueueLead,
+  enqueueSiteSync,
   getRedis,
+  isDeployDirty,
+  PIPELINE_QUEUE_NAME,
   registerLiveness,
+  SITE_SYNC_QUEUE_NAME,
   startLivenessRefresh,
 } from "../lib/queue"
 import type { StepOutcome } from "../lib/pipeline-types"
 import { resolveMany } from "../lib/settings"
 import { storageAbs } from "../lib/storage"
 
+import { runSiteSync } from "./deploy/sync"
+
+/** Backs a persistently failing sync off instead of hot-looping the queue. */
+const SITE_SYNC_RETRY_DELAY_MS = 60_000
 import { processLeadJob } from "./pipeline"
 import { runBootRecovery, startPeriodicReconcile } from "./recovery"
 import { closeSharedBrowser } from "./recorder/browser"
@@ -83,6 +90,62 @@ async function main(): Promise<void> {
     )
   })
 
+  const siteSyncWorker = new Worker<Record<string, never>>(
+    SITE_SYNC_QUEUE_NAME,
+    async () => runSiteSync({ signal: shutdownController.signal }),
+    {
+      connection: getRedis(),
+      concurrency: 1,
+    },
+  )
+
+  siteSyncWorker.on("completed", () => {
+    void (async () => {
+      try {
+        if (await isDeployDirty()) {
+          const landed = await enqueueSiteSync()
+          if (!landed) {
+            console.debug("[worker] site-sync re-enqueue skipped (job locked)")
+          }
+        }
+      } catch (error) {
+        console.error("[worker] site-sync completed-listener failed:", error)
+      }
+    })()
+  })
+
+  siteSyncWorker.on("failed", (job, error) => {
+    console.error(
+      `[worker] site-sync job ${job?.id ?? "?"} failed:`,
+      error,
+    )
+
+    // Only re-enqueue once BullMQ has spent its own attempts — otherwise this
+    // races the retry. Without this the dirty flag stays set with no consumer
+    // until the next worker boot, and deleted pages stay published.
+    const attemptsExhausted =
+      job == null || job.attemptsMade >= (job.opts.attempts ?? 1)
+    if (!attemptsExhausted) return
+
+    void (async () => {
+      try {
+        if (await isDeployDirty()) {
+          const landed = await enqueueSiteSync({
+            delayMs: SITE_SYNC_RETRY_DELAY_MS,
+          })
+          if (!landed) {
+            console.debug("[worker] site-sync retry enqueue skipped (job locked)")
+          }
+        }
+      } catch (enqueueError) {
+        console.error(
+          "[worker] site-sync failed-listener re-enqueue failed:",
+          enqueueError,
+        )
+      }
+    })()
+  })
+
   const stopPeriodicReconcile = startPeriodicReconcile()
 
   console.log(`[worker] consuming (concurrency=${concurrency})`)
@@ -94,7 +157,10 @@ async function main(): Promise<void> {
 
     shutdownController.abort()
 
-    const drainPromise = bullWorker.close()
+    const drainPromise = Promise.all([
+      bullWorker.close(),
+      siteSyncWorker.close(),
+    ])
     const timeout = new Promise<void>((_, reject) => {
       setTimeout(
         () => reject(new Error("shutdown drain timed out")),

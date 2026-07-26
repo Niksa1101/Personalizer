@@ -118,6 +118,59 @@ export async function resumePausedLeadsForCampaigns(
   }
 }
 
+async function resetForcedDeployState(campaignLeadId: string): Promise<void> {
+  const { data: lead, error } = await getSupabaseAdmin()
+    .from("campaign_leads")
+    .select("id, landing_page_id")
+    .eq("id", campaignLeadId)
+    .maybeSingle()
+
+  if (error) {
+    throw new Error(`Failed to load campaign lead for deploy reset: ${error.message}`)
+  }
+  if (!lead) {
+    throw new PipelineControlError(404, "Campaign lead not found")
+  }
+
+  const { data: updatedLead, error: leadUpdateError } = await getSupabaseAdmin()
+    .from("campaign_leads")
+    .update({
+      netlify_url: null,
+      deployed_at: null,
+      deployed_dry_run: false,
+    })
+    .eq("id", campaignLeadId)
+    .select("id")
+    .maybeSingle()
+
+  if (leadUpdateError) {
+    throw new Error(
+      `Failed to reset lead deploy state: ${leadUpdateError.message}`,
+    )
+  }
+  if (!updatedLead) {
+    throw new Error("Failed to reset lead deploy state: no row updated")
+  }
+
+  if (!lead.landing_page_id) return
+
+  const { data: updatedPage, error: pageUpdateError } = await getSupabaseAdmin()
+    .from("landing_pages")
+    .update({ deploy_status: "pending" })
+    .eq("id", lead.landing_page_id)
+    .select("id")
+    .maybeSingle()
+
+  if (pageUpdateError) {
+    throw new Error(
+      `Failed to reset landing page deploy status: ${pageUpdateError.message}`,
+    )
+  }
+  if (!updatedPage) {
+    throw new Error("Failed to reset landing page deploy status: no row updated")
+  }
+}
+
 export async function retryCampaignLead(
   campaignLeadId: string,
   mode: "resume" | "restart" | "step",
@@ -165,6 +218,9 @@ export async function retryCampaignLead(
     }
     if (step === "page") {
       patch.landing_page_id = null
+    }
+    if (step === "deploy") {
+      await resetForcedDeployState(campaignLeadId)
     }
   }
 

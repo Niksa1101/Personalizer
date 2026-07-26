@@ -75,11 +75,14 @@ export function GeneralTab({ campaign, slugLocked }: GeneralTabProps) {
             />
             {slugLocked ? (
               <FieldDescription>
-                Locked after first deploy — this slug appears in published URLs.
+                Locked after first deploy — this slug appears in published URLs,
+                including pages kept after a lead was deleted.
               </FieldDescription>
             ) : (
               <FieldDescription>
-                Used in landing page paths. Must be unique.
+                Used in landing page paths. Must be unique. Changing the slug
+                moves published pages once site sync runs; old URLs will 404,
+                including links already in prospect inboxes.
               </FieldDescription>
             )}
             <FieldError>{state.fieldErrors?.slug}</FieldError>

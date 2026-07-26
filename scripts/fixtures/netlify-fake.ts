@@ -13,6 +13,8 @@ type DeployRecord = {
   title: string
   manifest: Record<string, string>
   required: string[]
+  /** The digests asked for at create time — `required` shrinks as they land. */
+  requestedDigests: Set<string>
   uploads: Map<string, Buffer>
   state: "new" | "uploading" | "ready" | "error"
   errorMessage?: string
@@ -30,7 +32,9 @@ export type NetlifyFakeServer = {
   siteId: string
   sslUrl: string
   putCount: number
+  requestCount: number
   resetPutCount: () => void
+  resetRequestCount: () => void
   setMalformedFilesResponse: (value: boolean) => void
   setFailFirstDeployGet: (value: boolean) => void
   getSiteFiles: () => SiteFile[]
@@ -55,6 +59,16 @@ function sha1Hex(bytes: Buffer): string {
   return createHash("sha1").update(bytes).digest("hex")
 }
 
+function finalizeDeploy(siteFiles: Map<string, SiteFile>, deploy: DeployRecord): void {
+  deploy.state = "ready"
+  const manifestPaths = new Set(Object.keys(deploy.manifest))
+  for (const path of [...siteFiles.keys()]) {
+    if (!manifestPaths.has(path)) {
+      siteFiles.delete(path)
+    }
+  }
+}
+
 export async function startNetlifyFake(
   options: NetlifyFakeOptions = {},
 ): Promise<NetlifyFakeServer> {
@@ -62,6 +76,7 @@ export async function startNetlifyFake(
   const siteFiles = new Map<string, SiteFile>()
   const deploys = new Map<string, DeployRecord>()
   let putCount = 0
+  let requestCount = 0
   let malformedFilesResponse = options.malformedFilesResponse ?? false
   let failFirstDeployGet = options.failFirstDeployGet ?? false
   let deployGetAttempts = 0
@@ -71,6 +86,7 @@ export async function startNetlifyFake(
 
   await new Promise<void>((resolve) => {
     server = createServer(async (req, res) => {
+      requestCount += 1
       try {
         const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "127.0.0.1"}`)
         const pathname = url.pathname
@@ -112,14 +128,19 @@ export async function startNetlifyFake(
             (sha) => !knownShas.has(sha),
           )
           const deployId = randomUUID()
-          deploys.set(deployId, {
+          const deploy: DeployRecord = {
             id: deployId,
             title: body.title ?? "",
             manifest,
             required,
+            requestedDigests: new Set(required),
             uploads: new Map(),
             state: required.length === 0 ? "ready" : "uploading",
-          })
+          }
+          if (required.length === 0) {
+            finalizeDeploy(siteFiles, deploy)
+          }
+          deploys.set(deployId, deploy)
           sendJson(res, 200, { id: deployId, required })
           return
         }
@@ -168,6 +189,15 @@ export async function startNetlifyFake(
               return
             }
 
+            // Real Netlify only accepts digests it asked for. Enforcing this is
+            // what makes "100 pages / 1 change → one PUT" testable at all.
+            if (!deploy.requestedDigests.has(digest)) {
+              sendJson(res, 422, {
+                message: `digest ${digest} was not required by deploy ${deploy.id}`,
+              })
+              return
+            }
+
             deploy.uploads.set(normalizedPath, bytes)
             siteFiles.set(normalizedPath, {
               path: normalizedPath,
@@ -184,7 +214,7 @@ export async function startNetlifyFake(
             )
             deploy.required = remaining
             if (remaining.length === 0) {
-              deploy.state = "ready"
+              finalizeDeploy(siteFiles, deploy)
             }
 
             sendJson(res, 200, { path: normalizedPath })
@@ -220,8 +250,14 @@ export async function startNetlifyFake(
     get putCount() {
       return putCount
     },
+    get requestCount() {
+      return requestCount
+    },
     resetPutCount() {
       putCount = 0
+    },
+    resetRequestCount() {
+      requestCount = 0
     },
     setMalformedFilesResponse(value: boolean) {
       malformedFilesResponse = value

@@ -396,13 +396,24 @@ Two fields, per `DB.md` §2.1–2.2: `status` (coarse, for filtering) and `curre
 
 ### 7.1 Topology
 
-One BullMQ queue, `pipeline`. One job type, `process-lead`, whose payload is `{ campaignLeadId }` and nothing else — the worker re-reads state from PostgreSQL on pickup, so a stale queued job can never act on stale data.
+Two BullMQ queues share one module-private `addWithReplace()` primitive (`lib/queue.ts`):
 
-A single job walks all four steps in sequence within one worker invocation. Four separate queues were rejected: the steps share a working directory and large intermediate files, and splitting them buys parallelism the workstation cannot use anyway.
+| Queue | Job | Concurrency | Job id | Purpose |
+|---|---|---|---|---|
+| `pipeline` | `process-lead` | `settings.queue.concurrency` (default `1`, tested to `3`) | `campaignLeadId` | Walks all four steps in one worker invocation |
+| `site-sync` | `site-sync` | `1` | fixed `site-sync` | Pushes the full Netlify manifest after deletes, slug renames, or removal-guard detection |
 
-- **Concurrency:** `settings.queue.concurrency`, default `1`, tested to `3`. Above 1, Chromium and FFmpeg contend for CPU and the wall-clock gain flattens fast.
-- **Job id:** `campaignLeadId`, which makes enqueueing idempotent — a double-import cannot double-process.
-- **`removeOnComplete`:** 100. **`removeOnFail`:** false. Truth lives in `job_runs`; Redis is a work queue, not a record.
+`enqueueLead` and `enqueueSiteSync` are the **only two callers** of `addWithReplace()` — not exported, so a third caller cannot appear from outside.
+
+The pipeline job payload is `{ campaignLeadId }` only — the worker re-reads state from PostgreSQL on pickup, so a stale queued job can never act on stale data. A single job walks all four steps in sequence within one worker invocation. Four separate queues were rejected: the steps share a working directory and large intermediate files, and splitting them buys parallelism the workstation cannot use anyway.
+
+- **`removeOnComplete`:** pipeline `100`; site-sync `true`.
+- **`removeOnFail`:** both `false`. Truth lives in `job_runs`; Redis is a work queue, not a record.
+- **`attempts`/`backoff`:** site-sync retries 5 times with exponential backoff from 10 s. A dropped sync leaves deleted pages published, so it must not wait for the next worker boot; once attempts are exhausted the `failed` listener re-enqueues on a 60 s delay if the site is still dirty.
+
+**Deploy serialization** is separate from queue concurrency: a Redis lock (`pz:deploy:lock:{NETLIFY_SITE_ID}`) plus a dirty flag (`pz:deploy:dirty:{NETLIFY_SITE_ID}`) ensure one manifest deploy at a time. The `site-sync` worker loops internally (up to 3 passes) while holding the lock.
+
+**Two independent signals** say the site is behind the database, and recovery checks both: the Redis dirty flag (fast, lost with Redis) and `pending_site_sync` rows (durable, written in-transaction with the change — §10.3). Boot recovery and the 60 s periodic reconcile enqueue a sync if either is set.
 
 ### 7.2 Retry and backoff
 
@@ -672,25 +683,42 @@ Rendered HTML is stored in `landing_pages.html` with its SHA-1 in `content_sha1`
 
 ### 10.3 Netlify digest deploy
 
-Netlify's file-digest API takes a **full manifest** of the site and responds with only the digests it is missing.
+Netlify's file-digest API takes a **full manifest** of the site and responds with only the digests it is missing. The manifest is assembled in `worker/deploy/manifest.ts` from live `landing_pages`, `retained_pages` snapshots, and site files (`robots.txt`, `404.html`).
 
 ```
 POST /api/v1/sites/{site_id}/deploys
   { "files": { "/campaign-a/lead-1/index.html": "<sha1>",
                "/campaign-a/lead-2/index.html": "<sha1>",
-               "/robots.txt": "<sha1>" } }
+               "/robots.txt": "<sha1>",
+               "/404.html": "<sha1>" } }
 → { "id": "deploy_id", "required": ["<sha1>", ...] }
 
-PUT /api/v1/deploys/{deploy_id}/files/{path}     # only for digests in `required`
+PUT /api/v1/deploys/{deploy_id}/files/{path}     # once per path, even when digests repeat (D34)
 ```
 
-Sending the complete manifest each time is what makes this safe: the manifest **is** the desired state of the site, so a page that was deployed but is now absent from the manifest gets removed, and nothing drifts. Because `required` only ever contains changed files, redeploying 100 leads to change one costs one small upload.
+Sending the complete manifest each time is what makes this safe: the manifest **is** the desired state of the site, so a page that was deployed but is now absent from the manifest gets removed, and nothing drifts. Because `required` only ever contains changed digests, redeploying 100 leads to change one costs one small upload.
 
-**Unpublishing** is therefore just a deploy whose manifest omits the page. That is how the "also remove the published landing page?" prompt is implemented when a lead or campaign is deleted.
+**Only `required` digests are uploaded.** `planUploads(files, required)` in `worker/deploy/sync.ts` is the single place that decides — the unit is the *path*, not the digest, so two leads whose HTML is byte-identical share one digest but are still two PUTs (D34). Uploading the whole manifest defeats the protocol entirely and is what the "100 pages / 1 change → one PUT" check in `verify:deploy` exists to catch; the fake Netlify server rejects any PUT whose digest was not required (422) so the check cannot pass vacuously. Every completed deploy logs `manifest_file_count`, `required_count` and `uploaded_count` — the operator-visible proof.
 
-Deploys are **serialized** — one in flight at a time, guarded by a Redis lock. Concurrent deploys to one site race on the manifest and the loser silently reverts the winner's pages.
+**Truncation is indistinguishable from deletion**, so a manifest that would drop more than half of a site of 20+ published paths is refused (`detectMassRemoval`) rather than deployed. The two manifest reads paginate explicitly for the same reason: PostgREST's default 1000-row cap would silently unpublish everything past it.
 
-`settings.deploy.dry_run` runs the entire pipeline including HTML generation and stores everything, then skips every Netlify call, marking `deploy_status='pending'`. This is how the acceptance criteria are exercised without publishing.
+**Unpublishing** is therefore just a deploy whose manifest omits the page. Campaign delete with "Also remove the published landing page(s)" checked enqueues `site-sync`; the worker pushes the updated manifest. With the box unchecked, live pages are snapshotted into `retained_pages` first (`delete_campaign_retaining_pages` RPC) and stay in the manifest after the campaign row is gone.
+
+**A queued unpublish cannot be lost.** Redis is the fast path, not the record: `delete_campaign_retaining_pages` and `update_campaign_general` insert a `pending_site_sync` row **in the same transaction** as the destructive change. If Redis is unreachable the enqueue is logged and swallowed (`lib/site-sync.ts`), and boot recovery plus the 60 s periodic reconcile drain the table. Markers are cleared only up to the watermark of the deploy that satisfied them, so a change made *during* a sync survives it.
+
+> The enqueue is bounded at 3 s and never awaited unboundedly. ioredis reconnects forever by default, so an enqueue against a down Redis *hangs* rather than throwing — a `try/catch` is no protection against a promise that never settles, and the operator's delete would block indefinitely. Any web-request path that touches the queue needs the same treatment.
+
+**Post-deploy bookkeeping never fails a live deploy.** Once Netlify reports ready, the pages are serving; a reconcile error after that point flags the site dirty and queues a `site-sync` rather than marking a serving page `failed`. The deploy lock does not cover other leads' `page` steps, so row-status drift between the manifest read and the status update is expected and logged, not fatal.
+
+Deploys are **serialized** — one in flight at a time, guarded by a Redis lock and a manifest-hash cache (`pz:deploy:manifest:{NETLIFY_SITE_ID}`). Concurrent deploy attempts wait up to ~60s, then fail with `netlify_failure`.
+
+**Removal guard.** A lead's deploy that would drop paths hands the unpublish to `site-sync` and waits for it, since only `site-sync` is authorised to remove. It waits by polling the manifest cache for a *new* deploy id, budgeted from `deploy.timeout_ms` (default 300 000 ms) — the thing being waited on is a full Netlify deploy, so a short fixed budget would fail the triggering lead every time a page was genuinely removed.
+
+**Dry run:** `settings.deploy.dry_run` runs the entire pipeline including HTML generation and manifest assembly/validation, then skips every Netlify call (no lock, no cache, no HTTP). The lead reaches `status='deployed'` with `deployed_dry_run=true` and a null `netlify_url` (`DB.md` §5.4); `landing_pages.deploy_status` stays `pending`. A later real deploy clears the flag and writes the URL.
+
+**Verification:** `npm run verify:deploy` (hermetic fake Netlify by default; `DEPLOY_REAL=1` + scratch site for the real leg). No Redis required — the lock leg uses an in-process fake.
+
+Production URL checks: `npm run check:urls -- <url> <status>[:<body-substring>] …`. 200 responses must include `noindex`. Redirects are **not** followed — a 301 means the URL under test is not serving the page, and following it would let an unrelated 200 pass. The optional percent-encoded body substring is what distinguishes a page served from `retained_pages` from one the delete simply missed.
 
 ---
 
@@ -774,6 +802,8 @@ SESSION_SECRET=
 ```
 
 `lib/env.ts` validates all eight at startup, in both the Next process and the worker, and **refuses to boot** if any is missing or empty — with a message naming every missing variable at once, not just the first. A half-configured system that starts and then fails on lead 40 wastes far more time than one that refuses to start.
+
+**Test-only (not in `lib/env.ts`):** `NETLIFY_TEST_SITE_ID` — read directly from `process.env` by `scripts/verify-deploy.ts` for the `DEPLOY_REAL=1` leg only. Never required for normal operation; keeps "all eight" literally true.
 
 Additionally, set **`NEXT_SERVER_ACTIONS_ENCRYPTION_KEY`** in production: closure variables in inline actions are encrypted, and *"For multi-instance and self-hosted deployments, set `NEXT_SERVER_ACTIONS_ENCRYPTION_KEY` to a stable key shared across instances"* (`01-app/02-guides/server-actions.md:85`). Without it the key is generated per build, so a restart breaks clients holding in-flight action references. It is not in the eight because it is deployment hygiene rather than app configuration.
 
@@ -935,7 +965,10 @@ Run `npm run verify:record` after installing Chromium to exercise the hermetic f
 3. **Netlify rate limits** (risk 8).
 4. ~~**No public poster frame**~~ — **resolved in Phase 10.** Merge uploads `poster.jpg` beside the video; page derives `{{poster_url}}` from `videos.poster_storage_key`. See `DB.md` §11 item 5.
 5. **Merge with no recording at all** — **resolved in Phase 7.** Record-first-and-continue at most once per job; a second visit proceeds (see §11).
-6. **Dry-run terminal status** (raised in Phase 7). `dry_run` produces no `netlify_url`, and `campaign_leads_deployed_url_ck` forbids `status='deployed'` without one. Phase 7 sidesteps this with a synthetic stub URL; Phase 11 cannot. **Decide in Phase 11.**
+6. ~~**Dry-run terminal status**~~ — **resolved in Phase 11.** `campaign_leads.deployed_dry_run` plus a relaxed `campaign_leads_deployed_url_ck` allow `status='deployed'` with a null `netlify_url` when dry-run is active; a real deploy clears the flag. See `DB.md` §5.4.
+7. **`retained_pages` manual removal** — no in-app UI. To stop serving a kept-after-delete page: delete the `retained_pages` row **and** trigger a `site-sync` (or wait for the next deploy of any kind — the manifest is desired state). Deleting the row alone unpublishes nothing until a sync runs.
+8. **Mass-removal floor is a refusal, not a repair** (§10.3) — a manifest dropping >50 % of a 20+ page site fails the sync and keeps failing until the underlying data is fixed. That is deliberate (staying published beats mass-404), but there is no in-app surface saying *why*; the reason is only in the deployer log. Revisit when Phase 14 ships the Logs screen.
+9. **End-to-end dry-run coverage** — `verify:deploy` proves manifest assembly makes zero HTTP calls, but the full assertion (a lead reaching `deployed_dry_run=true` with a null `netlify_url`) needs Supabase and currently rides on the production run. A `verify:worker`-style leg would close it.
 
 ---
 

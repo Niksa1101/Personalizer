@@ -161,9 +161,11 @@ CREATE TYPE deploy_status AS ENUM (
   'uploading', -- Netlify has requested files by digest; we are pushing them
   'live',
   'failed',
-  'removed'    -- landing page deliberately unpublished
+  'removed'    -- reserved: deliberate per-page unpublish (Phase 13 UI; mechanism ships Phase 11 via manifest omission)
 );
 ```
+
+`removed` is outside `MANIFEST_DEPLOY_STATUSES` (`pending`, `uploading`, `live`, `failed`), so a page in that state is omitted from the manifest — that omission *is* the unpublish. The deploy step therefore treats `removed` as a **stale** page: asking to deploy a lead whose page is unpublished republishes it (`upsertLandingPage` revives the row to `pending`), and the step fails loudly if the trigger lead's page is somehow still absent from the manifest. Without that, the lead would deploy "successfully" while never reaching `status='deployed'`.
 
 ### 2.6 `merge_layout`
 
@@ -434,6 +436,7 @@ One lead's participation in one campaign. Everything the pipeline reads and writ
 | `queued_at` | `timestamptz` | yes | — | |
 | `started_at` | `timestamptz` | yes | — | First time a worker picked it up. |
 | `deployed_at` | `timestamptz` | yes | — | |
+| `deployed_dry_run` | `boolean` | no | `false` | Set when `settings.deploy.dry_run` completes the pipeline without a real Netlify URL. Cleared on the next live deploy. |
 | `promoted_at` | `timestamptz` | yes | — | `deployed` → `ready`. |
 | `created_at` | `timestamptz` | no | `now()` | |
 | `updated_at` | `timestamptz` | no | `now()` | trigger |
@@ -445,7 +448,7 @@ UNIQUE (campaign_id, lead_id)            -- once per campaign; the core rule
 UNIQUE (campaign_id, slug)               -- backs the URL path
 CHECK  (attempt_count >= 0 AND attempt_count <= 10)
 CHECK  (status <> 'ready'    OR netlify_url IS NOT NULL)   -- can't promote what isn't live
-CHECK  (status <> 'deployed' OR netlify_url IS NOT NULL)
+CHECK  (status <> 'deployed' OR netlify_url IS NOT NULL OR deployed_dry_run)
 CHECK  (status <> 'failed'   OR error_code IS NOT NULL)    -- a failure always explains itself
 ```
 
@@ -568,6 +571,8 @@ The deploy sends a **full manifest** every time; Netlify responds with only the 
 
 When regenerated HTML differs (`content_sha1` changes) or the site-relative `path` changes (slug rename), `deploy_status` resets to `'pending'` and `unpublished_at` clears — a previously `live` page must redeploy before Netlify serves the new bytes. A regeneration where both `content_sha1` and `path` are unchanged touches nothing (including `deploy_status`).
 
+**Deploy state transitions (Phase 11):** rows in the manifest with `deploy_status ∈ {pending, uploading, live, failed}` are included; `removed` is excluded until Phase 13 sets it deliberately. On a successful deploy, every manifest path → `live` with `deployed_at` and `netlify_deploy_id`; paths in `required` pass through `uploading` first. Failed deploys set `failed` + truncated `error_detail`. Dry-run leaves `deploy_status='pending'` on the page row while the lead reaches `deployed` with `deployed_dry_run=true`.
+
 ---
 
 ### 5.9 `job_runs`
@@ -677,8 +682,9 @@ Seeded keys:
 | `queue.concurrency` | `1` | Tested to 3. |
 | `queue.auto_retry_limit` | `2` | Then `failed`. |
 | `deploy.dry_run` | `false` | Skips Netlify entirely; everything else runs. |
+| `deploy.timeout_ms` | `300000` | Whole-deploy budget (lock wait + upload + poll). Added in Phase 11 by `20260726130200_deploy_timeout_setting.sql`. |
 
-Fifteen keys. Fourteen come from `seed_demo_data()` (§10); `encode.merge_timeout_ms` is inserted by its own migration instead, because §9.2 is forward-only and the seed function was already applied. The distinction is invisible in practice — migrations always run before the seed, and the function's `INSERT … ON CONFLICT (key) DO NOTHING` no-ops on a key that already exists — so every path yields the same fifteen rows. **A sixteenth key should go in the seed function, not follow this pattern.**
+Sixteen keys. Fourteen come from `seed_demo_data()` (§10); `encode.merge_timeout_ms` and `deploy.timeout_ms` are each inserted by their own migration instead, because §9.2 is forward-only and the seed function was already applied. The distinction is invisible in practice — migrations always run before the seed, and the function's `INSERT … ON CONFLICT (key) DO NOTHING` no-ops on a key that already exists — so every path yields the same sixteen rows. **A seventeenth key should go in the seed function, not follow this pattern.**
 
 `lib/settings.ts` carries a `SETTING_DEFAULTS` fallback for every key and warns when one is missing from the table, so an unseeded key degrades to its default rather than breaking the pipeline. It would, however, be invisible to the Settings screen (`PRD.md` §6.8), which enumerates this table.
 
@@ -701,6 +707,48 @@ This is the **only** table reachable by a non-service key. The cron uses a narro
 Because the key has **no** `SELECT`, the insert must not ask for the row back. PostgREST has defaulted to `Prefer: return=minimal` on `POST` since v9, so the `Tech.md` §15 `curl` succeeds as written (verified: `201`), but the header is now sent explicitly there rather than relied upon.
 
 A weekly `DELETE FROM heartbeat WHERE created_at < now() - interval '90 days'` keeps it bounded — run from the same action, or left alone, since the row is tiny.
+
+---
+
+### 5.14 `retained_pages`
+
+Snapshot of live landing pages kept after a campaign delete when the operator unchecks "Also remove the published landing page(s)". Rows are unioned into the Netlify manifest so the URL stays live after the source `landing_pages` and `campaign_leads` rows are gone.
+
+| Column | Type | Null | Default | Notes |
+|---|---|---|---|---|
+| `id` | `uuid` | no | `gen_random_uuid()` | PK |
+| `path` | `text` | no | — | Site-relative path (same as `landing_pages.path`). Unique. |
+| `html` | `text` | no | — | Snapshot at retain time |
+| `content_sha1` | `text` | no | — | `CHECK (content_sha1 ~ '^[0-9a-f]{40}$')` |
+| `retained_at` | `timestamptz` | no | `now()` | |
+| `reason` | `text` | yes | — | e.g. `campaign_delete_retain` |
+| `lead_ref` | `text` | yes | — | Denormalized — source lead row is gone |
+| `campaign_ref` | `text` | yes | — | Denormalized — used by slug-lock (`firstDeployLocked`) |
+
+```sql
+CREATE INDEX retained_pages_campaign_ref_idx ON retained_pages (campaign_ref);
+```
+
+RLS enabled, no policy — service-role only. Populated by `snapshot_live_pages()`; `ON CONFLICT (path) DO UPDATE` for retained-vs-retained collision. A live `landing_pages` row at the same path wins on deploy (D32) and the retained row is deleted.
+
+**Snapshot scope** covers `deploy_status IN ('pending','uploading','live','failed')` with non-null `html`/`content_sha1` — the manifest-eligible set, not `live` alone. A page's row status lags the site: a campaign mid-deploy is genuinely published on Netlify while its rows still read `pending`. Retaining only `live` rows silently 404'd pages the operator had asked to keep.
+
+### 5.15 `pending_site_sync`
+
+Durable record that the Netlify site is behind the database. Written **inside the same transaction** as the change that caused it, which is the whole point: Redis was previously the only record, so a Redis outage during a campaign delete stranded published pages with their source rows already gone (`Tech.md` §10.3).
+
+| Column | Type | Null | Default | Notes |
+|---|---|---|---|---|
+| `id` | `uuid` | no | `gen_random_uuid()` | PK |
+| `reason` | `text` | no | — | `campaign_delete`, `campaign_slug_change` |
+| `requested_at` | `timestamptz` | no | `now()` | Drain watermark |
+| `meta` | `jsonb` | yes | — | Campaign id/ref, retain flag, moved-page count |
+
+```sql
+CREATE INDEX pending_site_sync_requested_at_idx ON pending_site_sync (requested_at);
+```
+
+RLS enabled, no policy — service-role only. Written by `delete_campaign_retaining_pages()` and `update_campaign_general()`. Drained by `runSiteSync` after a clean pass, deleting only rows with `requested_at <= ` the instant that pass read the manifest — a marker written *during* a sync describes a change that sync did not see. Boot recovery and the 60 s periodic reconcile enqueue a `site-sync` whenever any row exists.
 
 ---
 
@@ -914,6 +962,15 @@ supabase/
 
     -- Added after the Phase 10 review (PRD.md §11):
     20260726120000_campaign_general_rpc.sql        -- update_campaign_general() RPC
+
+    -- Added in Phase 11 (PRD.md §11):
+    20260726130000_retained_pages.sql              -- §5.14 — retained_pages + delete RPCs
+    20260726130100_campaign_leads_dry_run_deploy.sql -- §5.4 — deployed_dry_run + CHECK
+    20260726130200_deploy_timeout_setting.sql    -- §5.12 — deploy.timeout_ms
+
+    -- Added after the Phase 11 review (PRD.md §11):
+    20260726140000_reconcile_manifest_deploy_rpc.sql -- one-statement post-deploy reconcile
+    20260726140100_pending_site_sync.sql           -- §5.15 + widened snapshot + marker writes
   seed.sql                               -- one line: SELECT public.seed_demo_data();
 ```
 
@@ -946,9 +1003,9 @@ The resolution is to declare the **column** in `core_tables` and add the **`FORE
 `seed.sql` provisions a demo campaign so a fresh clone has something to look at, and so the acceptance criteria in `PRD.md` §9 can be exercised without a real CSV.
 
 ```sql
--- Settings defaults (§5.12). Fourteen of the fifteen keys: encode.merge_timeout_ms
--- arrived in Phase 9, after this function was already applied, so it is inserted
--- by 20260725120000_encode_merge_timeout_setting.sql instead (§5.12, §9.2).
+-- Settings defaults (§5.12). Fourteen of the sixteen keys ship here;
+-- encode.merge_timeout_ms (Phase 9) and deploy.timeout_ms (Phase 11) are inserted
+-- by their own migrations instead (§5.12, §9.2).
 INSERT INTO settings (key, value, description) VALUES
   ('recorder.viewport_width',   '1920',        'Browser width for website recording'),
   ('recorder.viewport_height',  '1080',        'Browser height for website recording'),
@@ -1029,5 +1086,8 @@ Carried into `Tech.md` review rather than resolved here:
 Raised by the Phase 1 implementation, and **not** resolvable in the schema:
 
 5. ~~**No public poster frame.**~~ **Resolved in Phase 10.** The merge step uploads `poster.jpg` beside the video (`videos.poster_storage_key`, key `{video prefix}/poster.jpg`); the page step derives `{{poster_url}}` from it. Posters encoded at 720px wide (`-q:v 4`); upload failure is non-fatal (page renders posterless with the `preload="metadata"` fallback). No backfill for leads merged before this change — they stay posterless until a `step:merge` re-uploads. Local `poster_path` is kept indefinitely as the admin thumbnail.
-6. **Merge with no recording at all.** See the note at the end of §10.1. `Tech.md` §11 distinguishes purged-and-absent from unexpectedly-absent, but not from never-recorded — which is the state the seed creates and which AC-4 walks through. **Decide in Phase 7.**
+6. ~~**Merge with no recording at all.**~~ **Resolved in Phase 7.** Record-first-and-continue at most once per job; see `Tech.md` §11 item 5.
 7. **`seed_demo_data()` ships in the schema.** A seed function living in a migration is unusual; it is the price of a single source of truth for the seed (§10.1). If migrations ever need to be replayed against a production-like database, this function will be created there too. It is `REVOKE`d from every non-service role, so the exposure is nil, but it is worth remembering that it exists.
+8. **`deploy_status='removed'`** — enum value reserved for Phase 13 per-page unpublish UI. Phase 11 unpublishes via manifest omission only; the value is documented in §2.5, and the deploy step now handles it as a stale page so the Phase 13 button cannot strand a lead.
+9. **`pending_site_sync` is never pruned on abandonment.** A marker whose sync keeps failing stays forever and keeps re-enqueueing — deliberate (a stranded published page is worse than a noisy queue), but there is no age-out and no UI showing the backlog. Phase 14's Logs/Queue screens should surface a marker older than, say, an hour.
+10. **`reconcile_manifest_deploy` status guard is duplicated four times** in the RPC — one `CASE` per column, all with the same predicate. Postgres has no multi-column conditional assignment; a `FROM ... WHERE` split into two statements would read better but would touch `netlify_url` and `status` in separate passes. Revisit if the guard grows.

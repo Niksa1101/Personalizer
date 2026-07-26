@@ -6,7 +6,11 @@ import { toast } from "sonner"
 
 const TOAST_MESSAGES: Record<string, { message: string; type: "success" | "info" }> = {
   created: { message: "Campaign created", type: "success" },
-  deleted: { message: "Campaign deleted", type: "success" },
+  deleted: {
+    message:
+      "Campaign deleted. Removal queued — published pages update on the next sync.",
+    type: "success",
+  },
 }
 
 export function CampaignToastHandler() {
