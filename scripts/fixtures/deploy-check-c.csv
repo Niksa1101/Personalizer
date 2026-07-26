@@ -1,0 +1,3 @@
+website,company,first_name,last_name,email,city,country,industry
+https://vuejs.org,Vuejs Retained Fixture Co,Evan,You,hello@vuejs.org,Singapore,Singapore,Software
+https://astro.build,Astro Retained Fixture Co,Fred,Schott,hello@astro.build,Seattle,USA,Software
