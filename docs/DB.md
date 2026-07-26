@@ -286,6 +286,8 @@ $$;
 > `greatest(<width>, length(v))` removes the cliff rather than moving it: `lpad` still zero-pads short values to the historical shape and becomes a no-op once the number outgrows the width. Refs below the boundary are byte-identical (`CMP-01`, `LD-0001`), so no backfill was needed — and none was possible to get wrong, since no row generated above a boundary had survived. `nextval()` is captured in a CTE because referencing it twice in the expression would burn two sequence values per ref.
 >
 > The lesson for §9.2's forward-only rule: a check that only exercises values *below* a padding boundary proves nothing about the boundary. Phase 1 verified both sequences and still missed this.
+>
+> `npm run verify:schema` now pins it. It samples twelve consecutive refs from each generator rather than a pair, because a truncating generator repeats itself for a whole decade — one pair would only catch it when it happened to straddle a boundary, and a check that passes nine runs in ten is worse than none. The same leg catches `nextval()` being evaluated twice per ref (gaps of 2), which is why the generators capture it in a CTE. Each run consumes twelve values per sequence.
 
 ### 4.3 Domain normalization
 
@@ -992,6 +994,7 @@ supabase/
     -- Added after the Phase 12 review (PRD.md §11):
     20260726160000_dashboard_counts_fixes.sql      -- scoped/recent ETA, processing order + SQL cap
     20260726170000_ref_padding_no_truncate.sql     -- §4.2 — lpad() truncation cliff
+    20260726180000_dashboard_eta_samples_fn.sql    -- dashboard_eta_samples() — one copy of the rule
   seed.sql                               -- one line: SELECT public.seed_demo_data();
 ```
 

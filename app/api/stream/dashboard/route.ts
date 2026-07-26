@@ -89,14 +89,23 @@ export async function GET(request: Request) {
       try {
         enqueueSnapshot(await getDashboardSnapshot(scopeResult))
       } catch (error) {
-        controller.enqueue(
-          encoder.encode(
-            encodeSseEvent("error", {
-              message:
-                error instanceof Error ? error.message : "Failed to load snapshot",
-            }),
-          ),
-        )
+        // Same guard as every other enqueue on this controller: the client can
+        // be gone by the time the snapshot fails, and throwing here would
+        // reject start() rather than report the error.
+        try {
+          controller.enqueue(
+            encoder.encode(
+              encodeSseEvent("error", {
+                message:
+                  error instanceof Error
+                    ? error.message
+                    : "Failed to load snapshot",
+              }),
+            ),
+          )
+        } catch {
+          cleanup()
+        }
       }
 
       if (request.signal.aborted) {

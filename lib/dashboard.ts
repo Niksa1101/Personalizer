@@ -10,7 +10,7 @@ import {
   type DashboardScope,
   type DashboardSnapshot,
 } from "@/lib/dashboard-types"
-import { resolveMany, resolveValueFromGlobal } from "@/lib/settings"
+import { resolveMany, resolveValue } from "@/lib/settings"
 import { getSupabaseAdmin } from "@/lib/supabase"
 
 const PROCESSING_CAP = 10
@@ -93,7 +93,7 @@ export async function getDashboardSnapshot(
 
     for (const campaign of campaigns ?? []) {
       campaignSettings.set(campaign.id, {
-        navTimeoutMs: resolveValueFromGlobal(
+        navTimeoutMs: resolveValue(
           "recorder.nav_timeout_ms",
           globalDefaults,
           { campaign: campaign.nav_timeout_ms },

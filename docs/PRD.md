@@ -849,7 +849,7 @@ Shipped: `dashboard_counts()` RPC (`20260726150000_dashboard_counts_rpc.sql`, fi
 
 **Open item recorded:** `listCampaigns()` still loads every `campaign_leads` row with no pagination (PostgREST 1000-row cap) — same class as Phase 11 review finding 8; `dashboard_counts()` is now one step away from fixing it, deferred intentionally.
 
-Verified by `npm run typecheck`, `npm run lint`, `npm test` (**229 tests**), and `npm run verify:dashboard` — **17/17 with the dev server running**, 1 skipped (the anon-grant leg needs `NEXT_PUBLIC_SUPABASE_ANON_KEY`). Without a dev server the three live legs report **skipped**, not passed, and the run is 14/14.
+Verified by `npm run typecheck`, `npm run lint`, `npm test` (**229 tests**), `npm run verify:dashboard` — **18/18 with the dev server running and no skips** — and `npm run verify:schema` (**6/6**). Without a dev server the three live legs report **skipped**, not passed, and the run is 15/15. `NEXT_PUBLIC_SUPABASE_ANON_KEY` is now set locally and documented in `.env.example` as verification-only, which is what re-armed the anon-grant check in both scripts.
 
 ---
 
