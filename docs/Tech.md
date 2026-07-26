@@ -718,7 +718,9 @@ Deploys are **serialized** — one in flight at a time, guarded by a Redis lock 
 
 **Verification:** `npm run verify:deploy` (hermetic fake Netlify by default; `DEPLOY_REAL=1` + scratch site for the real leg). No Redis required — the lock leg uses an in-process fake.
 
-Production URL checks: `npm run check:urls -- <url> <status>[:<body-substring>] …`. 200 responses must include `noindex`. Redirects are **not** followed — a 301 means the URL under test is not serving the page, and following it would let an unrelated 200 pass. The optional percent-encoded body substring is what distinguishes a page served from `retained_pages` from one the delete simply missed.
+Production URL checks: `npm run check:urls -- <url> <status>[:<body-substring>] …`. 200 responses must include `noindex`. The optional percent-encoded body substring is what distinguishes a page served from `retained_pages` from one the delete simply missed.
+
+Redirects are **not** followed, with one exception: Netlify serves `/a/b/index.html` and 301s `/a/b` → `/a/b/`, which is the same page, so a redirect is followed when origin and query match and the paths are equal ignoring trailing slashes. Any other redirect fails the check with its `Location` reported — following those would let an unrelated 200 pass. Note the stored `netlify_url` therefore returns **301, not 200**, on a direct request; it resolves in any browser or mail client, which is what **AC-2** requires.
 
 ---
 
@@ -957,6 +959,7 @@ Run `npm run verify:record` after installing Chromium to exercise the hermetic f
 | 6 | Domain-only dedupe collisions | `DB.md` §6.1; accepted at this volume. |
 | 7 | Redis as setup friction on Windows | §7.6 alternative stays viable; switch cost is bounded. |
 | 8 | Netlify free-tier deploy limits at high lead counts | Unmeasured. **Open** — verify before the first 500-lead run. |
+| 9 | **`NETLIFY_SITE_ID` pointing at a site that holds other content destroys it** | A deploy is a full-manifest replacement: anything absent from the manifest is deleted. The mass-removal floor (§10.3) does **not** protect a first deploy — it compares against the Redis manifest cache, which is empty on a cold start, so there is nothing to compare against. The app must own its site exclusively. Hit during the Phase 11 run: the account held two live unrelated sites, and a purpose-built empty site was created rather than risk either. **Open** — no in-app guard exists; consider refusing to deploy when `listSiteFiles()` returns paths the manifest has never owned and the cache is cold. |
 
 **Open questions for the next review**, deliberately not assumed:
 
