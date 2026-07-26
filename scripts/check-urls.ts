@@ -84,15 +84,30 @@ function parsePairs(argv: string[]): UrlCheck[] {
   return pairs
 }
 
-async function fetchStatus(
+/**
+ * Netlify serves `/a/b/index.html` and 301s `/a/b` → `/a/b/`. That is the same
+ * page, so following it is correct. A redirect to any *other* location is not,
+ * and following that would let an unrelated 200 pass the check.
+ */
+function isTrailingSlashRedirect(from: string, to: string | null): boolean {
+  if (!to) return false
+  try {
+    const a = new URL(from)
+    const b = new URL(to, from)
+    if (a.origin !== b.origin || a.search !== b.search) return false
+    return a.pathname.replace(/\/+$/, "") === b.pathname.replace(/\/+$/, "")
+  } catch {
+    return false
+  }
+}
+
+async function fetchOnce(
   url: string,
 ): Promise<{ status: number; body: string; location: string | null }> {
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
   try {
     const response = await fetch(url, {
-      // Not "follow": a redirect means this URL is not serving the page under
-      // test, and following it would let an unrelated 200 pass the check.
       redirect: "manual",
       signal: controller.signal,
       headers: { Accept: "text/html,*/*" },
@@ -106,6 +121,18 @@ async function fetchStatus(
   } finally {
     clearTimeout(timer)
   }
+}
+
+async function fetchStatus(
+  url: string,
+): Promise<{ status: number; body: string; location: string | null }> {
+  const first = await fetchOnce(url)
+  if (first.status >= 300 && first.status < 400) {
+    if (isTrailingSlashRedirect(url, first.location)) {
+      return fetchOnce(new URL(first.location!, url).toString())
+    }
+  }
+  return first
 }
 
 async function checkPair(check: UrlCheck): Promise<void> {
