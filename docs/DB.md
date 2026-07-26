@@ -267,13 +267,25 @@ CREATE SEQUENCE lead_ref_seq     START 1;
 CREATE SEQUENCE campaign_ref_seq START 1;
 
 CREATE OR REPLACE FUNCTION next_lead_ref() RETURNS text
-LANGUAGE sql AS $$ SELECT 'LD-'  || lpad(nextval('lead_ref_seq')::text, 4, '0') $$;
+LANGUAGE sql AS $$
+  WITH n AS (SELECT nextval('lead_ref_seq') AS v)
+  SELECT 'LD-'  || lpad(n.v::text, greatest(4, length(n.v::text)), '0') FROM n
+$$;
 
 CREATE OR REPLACE FUNCTION next_campaign_ref() RETURNS text
-LANGUAGE sql AS $$ SELECT 'CMP-' || lpad(nextval('campaign_ref_seq')::text, 2, '0') $$;
+LANGUAGE sql AS $$
+  WITH n AS (SELECT nextval('campaign_ref_seq') AS v)
+  SELECT 'CMP-' || lpad(n.v::text, greatest(2, length(n.v::text)), '0') FROM n
+$$;
 ```
 
 `LD-0042` is **global** across all campaigns and batches — it identifies a person, and a person keeps one ref no matter how many campaigns they appear in. `CMP-01` is a plain campaign series. Both pad for sortability and both overflow gracefully (`LD-10000` is fine; the pad is a floor, not a ceiling).
+
+> **Correction landed during Phase 12 verification** (`20260726170000_ref_padding_no_truncate.sql`). The paragraph above stated the intent; the SQL did not implement it. **`lpad()` truncates on the right when its input is longer than the target width** — it is not padding-only. So the pad was a *ceiling*, exactly what the text denies: `lpad('10000', 4, '0')` is `'1000'`, and `LD-10000` collided with lead #1000. Campaigns were worse, at width 2: past 99 every value in a decade collapsed to the same two characters (`100`→`10`, `117`→`11`, `118`→`11`), so at most one INSERT per decade could succeed and the rest failed on `campaigns_ref_uk`. Found live with `campaign_ref_seq` at 117 — campaign creation was already broken.
+>
+> `greatest(<width>, length(v))` removes the cliff rather than moving it: `lpad` still zero-pads short values to the historical shape and becomes a no-op once the number outgrows the width. Refs below the boundary are byte-identical (`CMP-01`, `LD-0001`), so no backfill was needed — and none was possible to get wrong, since no row generated above a boundary had survived. `nextval()` is captured in a CTE because referencing it twice in the expression would burn two sequence values per ref.
+>
+> The lesson for §9.2's forward-only rule: a check that only exercises values *below* a padding boundary proves nothing about the boundary. Phase 1 verified both sequences and still missed this.
 
 ### 4.3 Domain normalization
 
@@ -973,6 +985,13 @@ supabase/
     -- Added after the Phase 11 review (PRD.md §11):
     20260726140000_reconcile_manifest_deploy_rpc.sql -- one-statement post-deploy reconcile
     20260726140100_pending_site_sync.sql           -- §5.15 + widened snapshot + marker writes
+
+    -- Added in Phase 12 (PRD.md §11):
+    20260726150000_dashboard_counts_rpc.sql        -- dashboard_counts() — one read for the whole screen
+
+    -- Added after the Phase 12 review (PRD.md §11):
+    20260726160000_dashboard_counts_fixes.sql      -- scoped/recent ETA, processing order + SQL cap
+    20260726170000_ref_padding_no_truncate.sql     -- §4.2 — lpad() truncation cliff
   seed.sql                               -- one line: SELECT public.seed_demo_data();
 ```
 
