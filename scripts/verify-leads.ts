@@ -22,6 +22,7 @@ import { subscribeLeadsStream } from "../lib/leads-stream"
 import { retryCampaignLead } from "../lib/pipeline-control"
 import { assertEnvOrExit } from "../lib/env-node"
 import { closeQueueConnections } from "../lib/queue"
+import { pendingJobIds, removeJobsThisRunOrphaned } from "./queue-sweep"
 import { getSupabaseAdmin } from "../lib/supabase"
 import { SESSION_COOKIE_NAME } from "../lib/session"
 
@@ -323,6 +324,7 @@ async function main(): Promise<void> {
     env.SUPABASE_SERVICE_ROLE_KEY,
     { auth: { persistSession: false, autoRefreshToken: false } },
   )
+  const pendingJobIdsAtStart = await pendingJobIds()
 
   const runId = Date.now().toString(36)
   const mediaDirAbs = path.join(env.LOCAL_STORAGE_ROOT, "verify", runId)
@@ -1334,6 +1336,12 @@ async function main(): Promise<void> {
     for (const id of leadIds) {
       await supabase.from("leads").delete().eq("id", id)
     }
+
+    // Strictly after the row deletions above: the sweep decides what to drop by
+    // asking which campaign_leads still exist, so running it first sees every
+    // fixture row alive and removes nothing.
+    await removeJobsThisRunOrphaned(supabase, pendingJobIdsAtStart)
+
     await closeQueueConnections()
   }
 
