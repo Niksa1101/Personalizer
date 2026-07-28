@@ -33,7 +33,7 @@
     "verify:schema": "tsx --env-file-if-exists=.env.local scripts/verify-schema.ts",
     "check:urls": "tsx scripts/check-urls.ts",
     "setup:browser": "playwright install chromium",
-    "redis:up": "docker start personalizer-redis || docker run -d --name personalizer-redis --restart unless-stopped -p 6379:6379 redis:7-alpine",
+    "redis:up": "docker start pz-redis || docker run -d --name pz-redis --restart unless-stopped -p 6379:6379 redis:7-alpine",
     "verify:server-only": "tsx scripts/verify-server-only.ts",
     "lint": "eslint"
   },
