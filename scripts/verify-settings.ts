@@ -123,10 +123,41 @@ async function runEnvLeakLeg(): Promise<void> {
 
     pass("env leak sentinel boot")
   } finally {
-    if (child?.pid) {
-      spawn("taskkill", ["/pid", String(child.pid), "/f", "/t"], { shell: true })
-    }
+    if (child) await stopDevServer(child)
   }
+}
+
+/**
+ * Fire-and-forget cleanup left the sentinel dev server running: the script
+ * exits before taskkill does its work, and the next run then refuses to start
+ * because 3111 is occupied — so the leg would skip forever after one run.
+ */
+async function stopDevServer(child: ChildProcess): Promise<void> {
+  if (!child.pid) return
+
+  if (process.platform === "win32") {
+    // npm is spawned through a shell, so the dev server is a grandchild; /t
+    // takes the whole tree.
+    await new Promise<void>((resolve) => {
+      const killer = spawn(
+        "taskkill",
+        ["/pid", String(child.pid), "/f", "/t"],
+        { shell: true, stdio: "ignore" },
+      )
+      killer.once("exit", () => resolve())
+      killer.once("error", () => resolve())
+    })
+  } else {
+    child.kill("SIGKILL")
+  }
+
+  // taskkill returns before Windows releases the socket.
+  const deadline = Date.now() + 10_000
+  while (Date.now() < deadline) {
+    if (await portFree(3111)) return
+    await new Promise((resolve) => setTimeout(resolve, 250))
+  }
+  console.warn("WARN  port 3111 still held after cleanup")
 }
 
 function pass(name: string, detail = "ok"): void {

@@ -23,6 +23,7 @@ import { resumePausedLeadsForCampaigns } from "../lib/pipeline-control"
 import { upsertSettings } from "../lib/settings-admin"
 import { reconcile } from "../worker/recovery"
 import { pendingJobIds, removeJobsThisRunOrphaned } from "./queue-sweep"
+import { probeServer } from "./fixtures/ui-harness"
 
 interface CheckResult {
   name: string
@@ -49,12 +50,31 @@ function skip(name: string, reason: string): void {
   console.log(`SKIP  ${name} — ${reason}`)
 }
 
+function printSummary(): void {
+  const passed = results.filter((r) => r.state === "pass").length
+  const failed = results.filter((r) => r.state === "fail").length
+  const skipped = results.filter((r) => r.state === "skip").length
+  console.log(`\nSummary: ${passed} passed, ${failed} failed, ${skipped} skipped`)
+}
+
 async function main(): Promise<void> {
   const env = assertEnvOrExit()
   const supabase = createClient<Database>(
     env.NEXT_PUBLIC_SUPABASE_URL,
     env.SUPABASE_SERVICE_ROLE_KEY,
   )
+
+  // Every leg below reaches Redis — through pendingJobIds, buildQueueHealth or
+  // the worker child. Skip out rather than crashing so a run without Redis
+  // reports honestly and exits 0.
+  if ((await probeRedisHealth()) === "down") {
+    skip("all legs", "redis not reachable")
+    printSummary()
+    await closeHealthRedis()
+    return
+  }
+
+  const serverUp = await probeServer(BASE_URL)
   const runId = Date.now().toString(36)
   const pendingBefore = await pendingJobIds()
   const campaignIds: string[] = []
@@ -68,11 +88,18 @@ async function main(): Promise<void> {
       fail("/api/queue/health shape", JSON.stringify(health))
     }
 
-    const unauth = await fetch(`${BASE_URL}/api/queue/health`)
-    if (unauth.status === 401) {
-      pass("/api/queue/health 401 without session")
+    if (!serverUp) {
+      skip("/api/queue/health 401 without session", "dev server not reachable")
     } else {
-      skip("/api/queue/health 401 without session", `dev server returned ${unauth.status}`)
+      const unauth = await fetch(`${BASE_URL}/api/queue/health`)
+      if (unauth.status === 401) {
+        pass("/api/queue/health 401 without session")
+      } else {
+        skip(
+          "/api/queue/health 401 without session",
+          `dev server returned ${unauth.status}`,
+        )
+      }
     }
 
     const down = await probeRedisHealth("redis://127.0.0.1:6399")
@@ -302,10 +329,7 @@ async function main(): Promise<void> {
     await closeQueueConnections()
   }
 
-  const passed = results.filter((r) => r.state === "pass").length
-  const failed = results.filter((r) => r.state === "fail").length
-  const skipped = results.filter((r) => r.state === "skip").length
-  console.log(`\nSummary: ${passed} passed, ${failed} failed, ${skipped} skipped`)
+  printSummary()
 }
 
 function sleep(ms: number): Promise<void> {
