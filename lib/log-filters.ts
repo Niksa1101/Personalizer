@@ -85,6 +85,38 @@ export function parseLogFilters(params: LogsSearchParams): LogFilters {
   }
 }
 
+/**
+ * A rejected `level` or `cursor` param makes listLogs return zero rows while
+ * the filter controls still look untouched. Without a notice the screen blames
+ * the time window and offers to widen it, which cannot help.
+ */
+export type LogParamNotice = {
+  kind: "levels" | "cursor"
+  message: string
+  actionLabel: string
+}
+
+export function describeInvalidLogParams(filters: LogFilters): LogParamNotice[] {
+  const notices: LogParamNotice[] = []
+  if (filters.levelsAllInvalid) {
+    notices.push({
+      kind: "levels",
+      message:
+        "The level filter in this link matches no known level, so nothing is shown.",
+      actionLabel: "Show all levels",
+    })
+  }
+  if (filters.cursorInvalid) {
+    notices.push({
+      kind: "cursor",
+      message:
+        "This page link has expired or was altered, so nothing is shown.",
+      actionLabel: "Back to the first page",
+    })
+  }
+  return notices
+}
+
 export function serializeLogFilters(
   filters: LogFilters,
   overrides?: Partial<LogFilters>,
@@ -133,8 +165,8 @@ export function resolveLogTimeWindow(filters: LogFilters): {
   }
 
   const now = new Date()
-  const to = filters.to ? new Date(filters.to) : now
-  const openEnded = filters.to == null
+  const to = filters.to ? parseIsoDateOrNull(filters.to) : null
+  const openEnded = to == null
 
   switch (filters.preset) {
     case "1h":

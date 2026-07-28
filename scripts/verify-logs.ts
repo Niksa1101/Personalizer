@@ -4,6 +4,7 @@
 
 import { assertEnvOrExit } from "../lib/env-node"
 import {
+  describeInvalidLogParams,
   parseLogFilters,
   resolveLogTimeWindow,
 } from "../lib/log-filters"
@@ -117,9 +118,8 @@ async function main(): Promise<void> {
   }
   await supabase.from("logs").delete().in("id", [matchId, noMatchId])
 
-  const bogusLevel = await listLogs(
-    parseLogFilters({ preset: "24h", level: "bogus" }),
-  )
+  const bogusLevelFilters = parseLogFilters({ preset: "24h", level: "bogus" })
+  const bogusLevel = await listLogs(bogusLevelFilters)
   if (bogusLevel.rows.length === 0) {
     pass("bogus level yields no rows, not all rows")
   } else {
@@ -129,18 +129,36 @@ async function main(): Promise<void> {
     )
   }
 
-  const injected = await listLogs(
-    parseLogFilters({
-      preset: "24h",
-      cursor: "x') or (1=1--|1",
-    }),
-  )
+  const craftedCursorFilters = parseLogFilters({
+    preset: "24h",
+    cursor: "x') or (1=1--|1",
+  })
+  const injected = await listLogs(craftedCursorFilters)
   if (injected.rows.length === 0 && injected.nextCursor == null) {
     pass("crafted cursor is rejected, not interpolated")
   } else {
     fail(
       "crafted cursor is rejected, not interpolated",
       `returned ${injected.rows.length} rows`,
+    )
+  }
+
+  // Every emptying short-circuit inside listLogs must reach the screen as a
+  // reason. Otherwise a bookmarked bad link reads as "no logs in this window".
+  const unexplained = [
+    { label: "level=bogus", filters: bogusLevelFilters },
+    { label: "crafted cursor", filters: craftedCursorFilters },
+    {
+      label: "both",
+      filters: parseLogFilters({ level: "bogus", cursor: "garbage" }),
+    },
+  ].filter(({ filters }) => describeInvalidLogParams(filters).length === 0)
+  if (unexplained.length === 0) {
+    pass("rejected params are explained, not shown as an empty window")
+  } else {
+    fail(
+      "rejected params are explained, not shown as an empty window",
+      `${unexplained.map((entry) => entry.label).join(", ")} produced no notice`,
     )
   }
 
