@@ -28,6 +28,7 @@ import {
 } from "@/components/ui/table"
 import { LogExpandedRow } from "@/components/logs/log-expanded-row"
 import {
+  describeInvalidLogParams,
   formatLogWindowLabel,
   LOG_LEVELS,
   LOG_SCOPES,
@@ -66,6 +67,15 @@ export function LogsView({ initialResult, filters, loadedAt }: LogsViewProps) {
   }, [filters, loadedAt, openEnded])
 
   const displayNewCount = openEnded ? newCount : 0
+
+  const paramNotices = useMemo(
+    () => describeInvalidLogParams(filters),
+    [filters],
+  )
+
+  // A rejected level param leaves filters.levels holding every level so the
+  // rest of the UI stays sane; the boxes must not claim those levels are on.
+  const checkedLevels = filters.levelsAllInvalid ? [] : filters.levels
 
   function navigate(next: Partial<LogFilters>) {
     startTransition(() => {
@@ -181,11 +191,11 @@ export function LogsView({ initialResult, filters, loadedAt }: LogsViewProps) {
             {LOG_LEVELS.map((level) => (
               <label key={level} className="flex items-center gap-2 text-sm">
                 <Checkbox
-                  checked={filters.levels.includes(level)}
+                  checked={checkedLevels.includes(level)}
                   onCheckedChange={(checked) => {
                     const next = checked
-                      ? [...filters.levels, level]
-                      : filters.levels.filter((item) => item !== level)
+                      ? [...checkedLevels, level]
+                      : checkedLevels.filter((item) => item !== level)
                     navigate({
                       levels: next.length > 0 ? next : [...LOG_LEVELS],
                       cursor: undefined,
@@ -203,7 +213,28 @@ export function LogsView({ initialResult, filters, loadedAt }: LogsViewProps) {
         <p className="text-sm text-muted-foreground">{initialResult.leadRefMessage}</p>
       ) : null}
 
-      {initialResult.rows.length === 0 && !initialResult.unknownLeadRef ? (
+      {paramNotices.map((notice) => (
+        <p key={notice.kind} className="text-sm text-muted-foreground">
+          {notice.message}{" "}
+          <Button
+            variant="link"
+            className="h-auto p-0 text-sm"
+            onClick={() =>
+              navigate(
+                notice.kind === "levels"
+                  ? { levels: [...LOG_LEVELS], cursor: undefined }
+                  : { cursor: undefined },
+              )
+            }
+          >
+            {notice.actionLabel}
+          </Button>
+        </p>
+      ))}
+
+      {initialResult.rows.length === 0 &&
+      !initialResult.unknownLeadRef &&
+      paramNotices.length === 0 ? (
         <div className="rounded-xl border border-dashed border-border p-8 text-center text-sm text-muted-foreground">
           <p>No logs in {windowLabel}.</p>
           {filters.preset === "24h" ? (
