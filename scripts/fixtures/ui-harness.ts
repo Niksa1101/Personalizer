@@ -2,6 +2,8 @@
  * Shared Playwright + login scaffolding for UI verify scripts.
  */
 
+import { spawn, type ChildProcess } from "node:child_process"
+
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright"
 
 import { SESSION_COOKIE_NAME } from "../../lib/session"
@@ -34,6 +36,30 @@ export function createUiHarness() {
   }
 
   return { results, pass, fail, skip }
+}
+
+/**
+ * `spawn("npm", …, { shell: true })` hands back the shell's pid, not the node
+ * process underneath it. Signalling that pid on Windows kills the shell and
+ * orphans the real child — a leaked worker keeps draining the queue and
+ * silently corrupts every leg that runs after it.
+ */
+export async function killProcessTree(child: ChildProcess): Promise<void> {
+  const pid = child.pid
+  if (pid == null) return
+
+  if (process.platform !== "win32") {
+    child.kill("SIGKILL")
+    return
+  }
+
+  await new Promise<void>((resolve) => {
+    const killer = spawn("taskkill", ["/pid", String(pid), "/f", "/t"], {
+      stdio: "ignore",
+    })
+    killer.once("exit", () => resolve())
+    killer.once("error", () => resolve())
+  })
 }
 
 export async function probeServer(

@@ -3,6 +3,8 @@
  */
 
 import { spawn, type ChildProcess } from "node:child_process"
+import { Worker } from "bullmq"
+import Redis from "ioredis"
 import { createClient } from "@supabase/supabase-js"
 
 import type { Database } from "../lib/database.types"
@@ -16,6 +18,7 @@ import {
   closeQueueConnections,
   deleteLiveness,
   getQueue,
+  PIPELINE_QUEUE_NAME,
   scanLiveWorkers,
 } from "../lib/queue"
 import { clearQueue } from "../lib/queue-clear"
@@ -23,7 +26,7 @@ import { resumePausedLeadsForCampaigns } from "../lib/pipeline-control"
 import { upsertSettings } from "../lib/settings-admin"
 import { reconcile } from "../worker/recovery"
 import { pendingJobIds, removeJobsThisRunOrphaned } from "./queue-sweep"
-import { probeServer } from "./fixtures/ui-harness"
+import { killProcessTree, probeServer } from "./fixtures/ui-harness"
 
 interface CheckResult {
   name: string
@@ -186,8 +189,8 @@ async function main(): Promise<void> {
         skip("boot recovery keeps the alive key fresh", "no worker id")
       }
 
-      if (worker?.pid) {
-        process.kill(worker.pid, "SIGKILL")
+      if (worker) {
+        await killProcessTree(worker)
       }
       worker = null
 
@@ -217,7 +220,7 @@ async function main(): Promise<void> {
         fail("worker kill flips within 10s", `${flipElapsed}ms`)
       }
     } finally {
-      if (worker?.pid) process.kill(worker.pid, "SIGKILL")
+      if (worker) await killProcessTree(worker)
       await upsertSettings([{ key: "queue.concurrency", value: 1 }])
     }
 
@@ -267,35 +270,78 @@ async function main(): Promise<void> {
       await getQueue().add("process-lead", { campaignLeadId: cl!.id }, { jobId: cl!.id })
     }
 
-    const activeLead = leadIds[0]!
-    await getQueue().add(
-      "process-lead",
-      { campaignLeadId: activeLead },
-      { jobId: activeLead },
+    // The leg's whole point is that an active job survives the clear, so one
+    // job has to actually reach `active`. Re-adding a duplicate jobId does not
+    // do that — BullMQ ignores it — which left this asserting nothing. A
+    // blocked in-process worker at concurrency 1 takes exactly one job and
+    // holds it there.
+    let releaseHeldJob = (): void => {}
+    let heldJobSeen = false
+    const held = new Promise<void>((resolve) => {
+      releaseHeldJob = resolve
+    })
+    // A worker needs its own connection — it issues blocking commands.
+    const holderConnection = new Redis(env.REDIS_URL, {
+      maxRetriesPerRequest: null,
+    })
+    const holder = new Worker(
+      PIPELINE_QUEUE_NAME,
+      async () => {
+        heldJobSeen = true
+        await held
+      },
+      { connection: holderConnection, concurrency: 1 },
     )
 
-    const countsBefore = await getQueue().getJobCounts("waiting", "delayed", "active")
-    const waitingBefore = (countsBefore.waiting ?? 0) + (countsBefore.delayed ?? 0)
-    if (waitingBefore === 3) {
-      pass("clear-queue fixture has three waiting jobs")
-    } else {
-      fail("clear-queue fixture has three waiting jobs", String(waitingBefore))
-    }
+    try {
+      const activeDeadline = Date.now() + 15_000
+      let counts = await getQueue().getJobCounts("waiting", "delayed", "active")
+      while (Date.now() < activeDeadline && (counts.active ?? 0) < 1) {
+        await sleep(200)
+        counts = await getQueue().getJobCounts("waiting", "delayed", "active")
+      }
 
-    const cleared = await clearQueue()
-    if (cleared.removedCount === 2) {
-      pass("clear-queue removes waiting/delayed only")
-    } else {
-      fail("clear-queue removes waiting/delayed only", String(cleared.removedCount))
-    }
+      const waitingBefore = (counts.waiting ?? 0) + (counts.delayed ?? 0)
+      if (waitingBefore === 2 && (counts.active ?? 0) === 1) {
+        pass("clear-queue fixture has two waiting jobs and one active")
+      } else {
+        fail(
+          "clear-queue fixture has two waiting jobs and one active",
+          `waiting=${waitingBefore} active=${counts.active ?? 0} seen=${heldJobSeen}`,
+        )
+      }
 
-    if (cleared.pausedLeadCount <= cleared.removedCount) {
-      pass("clear-queue paused count separate from removals")
-    } else {
-      fail(
-        "clear-queue paused count separate from removals",
-        `paused=${cleared.pausedLeadCount} removed=${cleared.removedCount}`,
-      )
+      const cleared = await clearQueue()
+      const after = await getQueue().getJobCounts("waiting", "delayed", "active")
+      // removeFailedCount must stay 0: BullMQ's lock already refuses to remove
+      // an active job, so widening the state filter would not lose the job —
+      // it would just fail the removal silently and under-report to the
+      // operator. That count is the only signal that separates the two.
+      if (
+        cleared.removedCount === 2 &&
+        cleared.removeFailedCount === 0 &&
+        (after.active ?? 0) === 1
+      ) {
+        pass("clear-queue removes waiting/delayed only")
+      } else {
+        fail(
+          "clear-queue removes waiting/delayed only",
+          `removed=${cleared.removedCount} removeFailed=${cleared.removeFailedCount} activeAfter=${after.active ?? 0}`,
+        )
+      }
+
+      if (cleared.pausedLeadCount <= cleared.removedCount) {
+        pass("clear-queue paused count separate from removals")
+      } else {
+        fail(
+          "clear-queue paused count separate from removals",
+          `paused=${cleared.pausedLeadCount} removed=${cleared.removedCount}`,
+        )
+      }
+    } finally {
+      releaseHeldJob()
+      await holder.close()
+      await holderConnection.quit()
     }
 
     await reconcile()

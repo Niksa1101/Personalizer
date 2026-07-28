@@ -23,7 +23,7 @@ import {
 } from "../lib/settings"
 import { getSupabaseAdmin } from "../lib/supabase"
 import { SESSION_COOKIE_NAME } from "../lib/session"
-import { loginSessionCookie } from "./fixtures/ui-harness"
+import { killProcessTree, loginSessionCookie } from "./fixtures/ui-harness"
 
 interface CheckResult {
   name: string
@@ -85,18 +85,32 @@ async function runEnvLeakLeg(): Promise<void> {
       bootOutput = (bootOutput + chunk.toString()).slice(-4_000)
     })
 
+    // Next refuses to run a second dev server for the same directory, and the
+    // refusal surfaces downstream as a confusing "fetch failed" rather than a
+    // boot error — the port briefly binds either way.
+    const refusedForDuplicate = (): boolean =>
+      /already running/i.test(bootOutput)
+
     const ready = await waitForPort(3111, 60_000)
     if (!ready) {
-      fail(
-        "env leak sentinel boot",
-        `dev server did not start — ${bootOutput.slice(-800)}`,
-      )
+      if (refusedForDuplicate()) {
+        skip("env leak sentinel boot", "another dev server owns this directory")
+      } else {
+        fail(
+          "env leak sentinel boot",
+          `dev server did not start — ${bootOutput.slice(-800)}`,
+        )
+      }
       return
     }
 
     const login = await loginSessionCookie(env.APP_PASSWORD!, BASE_URL)
     if ("reason" in login) {
-      fail("env leak sentinel boot", login.reason)
+      if (refusedForDuplicate()) {
+        skip("env leak sentinel boot", "another dev server owns this directory")
+      } else {
+        fail("env leak sentinel boot", login.reason)
+      }
       return
     }
 
@@ -133,23 +147,7 @@ async function runEnvLeakLeg(): Promise<void> {
  * because 3111 is occupied — so the leg would skip forever after one run.
  */
 async function stopDevServer(child: ChildProcess): Promise<void> {
-  if (!child.pid) return
-
-  if (process.platform === "win32") {
-    // npm is spawned through a shell, so the dev server is a grandchild; /t
-    // takes the whole tree.
-    await new Promise<void>((resolve) => {
-      const killer = spawn(
-        "taskkill",
-        ["/pid", String(child.pid), "/f", "/t"],
-        { shell: true, stdio: "ignore" },
-      )
-      killer.once("exit", () => resolve())
-      killer.once("error", () => resolve())
-    })
-  } else {
-    child.kill("SIGKILL")
-  }
+  await killProcessTree(child)
 
   // taskkill returns before Windows releases the socket.
   const deadline = Date.now() + 10_000
