@@ -14,6 +14,7 @@ import {
   countRequests,
   createUiHarness,
   DEFAULT_POLL_MS,
+  killProcessTree,
   launchAuthenticatedPage,
   loginSessionCookie,
   probeServer,
@@ -55,13 +56,10 @@ async function main(): Promise<void> {
 
     await page.goto(`${UI_BASE_URL}/queue`, { waitUntil: "domcontentloaded" })
     await page.waitForTimeout(500)
-    const bannerText = await page.locator('[role="status"]').innerText()
-    if (!bannerText.includes("No worker")) {
-      pass("banner absent when healthy")
-    } else {
-      skip("banner absent when healthy", "no worker running")
-    }
 
+    // "banner absent when healthy" is asserted further down, once this script
+    // has a worker running. Checked here it passed whenever the first poll had
+    // not landed yet — the banner is empty before any health data arrives.
     const status = page.locator('[role="status"]')
     if ((await status.count()) === 1) {
       pass("role=status present from first paint")
@@ -112,11 +110,23 @@ async function main(): Promise<void> {
     }
 
     await page.goto(`${UI_BASE_URL}/queue`, { waitUntil: "domcontentloaded" })
+    // `health` is null until the first poll lands, so the card renders its
+    // other branch on first paint. Asserting immediately raced that and the
+    // leg skipped itself every run.
     const concurrencyCard = page.getByText("no worker running")
-    if (await concurrencyCard.count()) {
+    try {
+      await concurrencyCard.first().waitFor({ state: "visible", timeout: 15_000 })
       pass("concurrency shows no worker running")
-    } else {
-      skip("concurrency shows no worker running", "worker may be up")
+    } catch {
+      const bannerNow = await page.locator('[role="status"]').innerText()
+      if (!bannerNow.includes("No worker running")) {
+        skip("concurrency shows no worker running", "a worker is live")
+      } else {
+        fail(
+          "concurrency shows no worker running",
+          "banner reports no worker but the concurrency card does not",
+        )
+      }
     }
 
     let worker: ChildProcess | null = spawn("npm", ["run", "worker"], {
@@ -127,16 +137,24 @@ async function main(): Promise<void> {
     try {
       await page.waitForTimeout(3_000)
       await page.reload({ waitUntil: "domcontentloaded" })
-      await page.waitForFunction(
-        () => {
-          const el = document.querySelector('[role="status"]')
-          return el != null && !el.textContent?.includes("No worker running")
-        },
-        undefined,
-        { timeout: 15_000 },
-      )
+      try {
+        await page.waitForFunction(
+          () => {
+            const el = document.querySelector('[role="status"]')
+            return el != null && !el.textContent?.includes("No worker running")
+          },
+          undefined,
+          { timeout: 15_000 },
+        )
+        pass("banner absent when healthy")
+      } catch {
+        fail(
+          "banner absent when healthy",
+          "banner still reported no worker 15s after one started",
+        )
+      }
 
-      if (worker.pid) process.kill(worker.pid, "SIGKILL")
+      await killProcessTree(worker)
       worker = null
 
       const downStart = Date.now()
@@ -158,7 +176,7 @@ async function main(): Promise<void> {
         fail("worker down surfaces within 10s", `${downElapsed}ms`)
       }
     } finally {
-      if (worker?.pid) process.kill(worker.pid, "SIGKILL")
+      if (worker) await killProcessTree(worker)
     }
 
     const leadLinks = page.locator('a[href*="/leads?lead="]')
