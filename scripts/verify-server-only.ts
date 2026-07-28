@@ -5,7 +5,7 @@
  */
 
 import { execSync } from "node:child_process"
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs"
 import path from "node:path"
 
 const ROOT = path.resolve(import.meta.dirname, "..")
@@ -15,10 +15,6 @@ const LANDING_PAGE_MODULE = path.join(ROOT, "lib", "landing-page.ts")
 const LANDING_PAGE_IMPORTS = [
   path.join(ROOT, "lib", "landing-template.ts"),
 ]
-// `next build` generates route/validator types from the app tree, so the run
-// below bakes the temp page into them. Left behind, they outlive the deleted
-// page and break the next `tsc --noEmit` with TS2307. Next regenerates the
-// directory on any later build, so dropping it is safe.
 const GENERATED_TYPES_DIR = path.join(ROOT, ".next", "types")
 
 const TEMP_SOURCE = `"use client"
@@ -39,10 +35,106 @@ function cleanup(): void {
   }
 }
 
+const PURE_CLIENT_MODULES = [
+  path.join(ROOT, "lib", "lead-actions.ts"),
+  path.join(ROOT, "lib", "website-url.ts"),
+  path.join(ROOT, "lib", "error-copy.ts"),
+]
+
+const FORBIDDEN_IMPORT =
+  /(?:from\s+["'](?:server-only|csv-parse(?:\/sync)?)["'])|(?:import\s+["'](?:server-only|csv-parse(?:\/sync)?)["'])|process\.env\b/
+
+function collectTsFiles(dir: string, out: string[] = []): string[] {
+  if (!existsSync(dir)) return out
+  if (dir.includes(`${path.sep}.claude${path.sep}`)) return out
+
+  for (const entry of readdirSync(dir)) {
+    const abs = path.join(dir, entry)
+    if (entry === ".claude") continue
+    const stat = statSync(abs)
+    if (stat.isDirectory()) {
+      collectTsFiles(abs, out)
+    } else if (entry.endsWith(".ts") || entry.endsWith(".tsx")) {
+      out.push(abs)
+    }
+  }
+  return out
+}
+
+function resolveImport(fromFile: string, spec: string): string | null {
+  if (spec.startsWith("@/")) {
+    const rel = spec.slice(2).replace(/\.js$/, "")
+    const base = path.join(ROOT, rel)
+    const candidates = [`${base}.ts`, `${base}.tsx`, path.join(base, "index.ts")]
+    for (const candidate of candidates) {
+      if (existsSync(candidate)) return candidate
+    }
+    return null
+  }
+
+  if (spec.startsWith("./") || spec.startsWith("../")) {
+    const base = path.resolve(path.dirname(fromFile), spec.replace(/\.js$/, ""))
+    const candidates = [`${base}.ts`, `${base}.tsx`, path.join(base, "index.ts")]
+    for (const candidate of candidates) {
+      if (existsSync(candidate)) return candidate
+    }
+  }
+
+  return null
+}
+
+function collectImportSpecifiers(source: string): string[] {
+  const specs: string[] = []
+  const fromRe = /from\s+["']([^"']+)["']/g
+  for (const match of source.matchAll(fromRe)) {
+    specs.push(match[1]!)
+  }
+  const sideEffectRe = /import\s+["']([^"']+)["']/g
+  for (const match of source.matchAll(sideEffectRe)) {
+    specs.push(match[1]!)
+  }
+  return specs
+}
+
+function assertPureModulesBrowserSafe(): void {
+  const libFiles = collectTsFiles(path.join(ROOT, "lib"))
+  const workerFiles = collectTsFiles(path.join(ROOT, "worker"))
+  const allFiles = new Map(libFiles.concat(workerFiles).map((f) => [f, readFileSync(f, "utf8")]))
+
+  for (const entry of PURE_CLIENT_MODULES) {
+    const queue = [entry]
+    const seen = new Set<string>()
+
+    while (queue.length > 0) {
+      const file = queue.pop()!
+      if (seen.has(file)) continue
+      seen.add(file)
+
+      const source = allFiles.get(file) ?? readFileSync(file, "utf8")
+      if (FORBIDDEN_IMPORT.test(source)) {
+        console.error(
+          `FAIL  ${path.relative(ROOT, file)} pulls server-only, csv-parse, or process.env into ${path.relative(ROOT, entry)} graph`,
+        )
+        process.exit(1)
+      }
+
+      for (const spec of collectImportSpecifiers(source)) {
+        const resolved = resolveImport(file, spec)
+        if (resolved && !seen.has(resolved)) queue.push(resolved)
+      }
+    }
+  }
+
+  console.log(
+    "PASS  lib/lead-actions.ts, lib/website-url.ts, lib/error-copy.ts are browser-safe",
+  )
+}
+
 function assertLandingPageBrowserSafe(): void {
   const files = [LANDING_PAGE_MODULE, ...LANDING_PAGE_IMPORTS]
   const nodeImport = /from\s+["']node:[^"']+["']|require\s*\(\s*["']node:[^"']+["']\s*\)/
-  const serverOnlyImport = /from\s+["']server-only["']|require\s*\(\s*["']server-only["']\s*\)/
+  const serverOnlyImport =
+    /from\s+["']server-only["']|import\s+["']server-only["']|require\s*\(\s*["']server-only["']\s*\)/
 
   for (const file of files) {
     const source = readFileSync(file, "utf8")
@@ -66,6 +158,7 @@ function assertLandingPageBrowserSafe(): void {
 
 function main(): void {
   assertLandingPageBrowserSafe()
+  assertPureModulesBrowserSafe()
   cleanup()
 
   try {

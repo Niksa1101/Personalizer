@@ -5,10 +5,10 @@ import {
   hostFromLead,
   parseStubFailureHost,
 } from "@/lib/pipeline-retry"
+import { readStubStepMs } from "@/lib/pipeline-env"
 import {
   abortableDelay,
   PipelineStepError,
-  readStubStepMs,
 } from "@/lib/pipeline-types"
 import {
   evaluateRecordingPrecheck,

@@ -418,7 +418,9 @@ Pure identity and contact. **No status, no assets, no campaign reference.** If a
 | `created_at` | `timestamptz` | no | `now()` | |
 | `updated_at` | `timestamptz` | no | `now()` | trigger |
 
-`CHECK (domain IS NOT NULL OR email IS NOT NULL)` — a row with neither cannot be deduped or processed, and is rejected at import instead of stored.
+`leads_identifiable_ck` — `CHECK (domain IS NOT NULL OR email IS NOT NULL)`. A row with neither cannot be deduped or processed, and is rejected at import instead of stored.
+
+**It is an edit-path guard too, and that is the path operators actually meet it on.** Clearing a lead's website URL in the drawer nulls `domain` (the column is derived from the URL, never entered directly), so on a lead whose URL is its *only* identifier the save is refused with `23514`. `updateLead` translates that into "A lead needs a website URL or an email address — clearing both leaves nothing to dedupe on." The remedy has to name those two columns: earlier copy offered "a company name", which does not appear in the constraint at all and sent the operator to a field that could never clear the error (`PRD.md` Phase 13 finding 18). If this predicate is ever widened, that message is the thing to update with it — `verify:leads-ui` asserts both sides (cleared when an email exists; refused with usable copy when it does not).
 
 Deleting a lead cascades to its `campaign_leads`, `recordings` and, through those, to `videos` and `landing_pages`.
 
@@ -437,7 +439,7 @@ One lead's participation in one campaign. Everything the pipeline reads and writ
 | `status` | `lead_status` | no | `'queued'` | |
 | `current_step` | `pipeline_step` | no | `'recording'` | Where the job is, or where it stopped. |
 | `slug` | `text` | no | — | Lead slug: name+city, hash suffix only on collision. Unique **within a campaign**. |
-| `netlify_url` | `text` | yes | — | Full published URL. Set on successful deploy; cleared on unpublish. |
+| `netlify_url` | `text` | yes | — | Full published URL. Set on successful deploy; **retained on unpublish** (unpublish is a `landing_pages.deploy_status` change only — see §2.5). |
 | `recording_id` | `uuid` | yes | — | FK → `recordings(id)` `ON DELETE SET NULL`. The recording this campaign's video was built from. |
 | `video_id` | `uuid` | yes | — | FK → `videos(id)` `ON DELETE SET NULL` |
 | `landing_page_id` | `uuid` | yes | — | FK → `landing_pages(id)` `ON DELETE SET NULL` |
@@ -762,7 +764,7 @@ Durable record that the Netlify site is behind the database. Written **inside th
 CREATE INDEX pending_site_sync_requested_at_idx ON pending_site_sync (requested_at);
 ```
 
-RLS enabled, no policy — service-role only. Written by `delete_campaign_retaining_pages()` and `update_campaign_general()`. Drained by `runSiteSync` after a clean pass, deleting only rows with `requested_at <= ` the instant that pass read the manifest — a marker written *during* a sync describes a change that sync did not see. Boot recovery and the 60 s periodic reconcile enqueue a `site-sync` whenever any row exists.
+RLS enabled, no policy — service-role only. Written by `delete_campaign_retaining_pages()`, `delete_lead_retaining_pages()`, `unpublish_landing_page()`, and `update_campaign_general()`. Drained by `runSiteSync` after a clean pass, deleting only rows with `requested_at <= ` the instant that pass read the manifest — a marker written *during* a sync describes a change that sync did not see. Boot recovery and the 60 s periodic reconcile enqueue a `site-sync` whenever any row exists.
 
 **Verified end to end** in the Phase 11 artifact (ii) run: both campaign deletes were issued as raw RPC calls with no Redis enqueue, so the reconcile had to find the markers unaided. It did, synced, and cleared them. Note the dirty flag is *transient* — `runSiteSyncPass` clears it before assembling — so polling `pz:deploy:dirty:*` is not a reliable way to observe a pending sync; query this table instead.
 
@@ -871,6 +873,13 @@ Two notes for anyone revisiting this. `ALTER DEFAULT PRIVILEGES` binds to the **
 ### 7.2 Realtime
 
 Supabase Realtime respects RLS. Because the dashboard subscribes through the server, not the browser, no policy is needed to make live updates work — the server-side subscription uses the service role. Should a future change move subscriptions into the browser, that requires a real auth model, not a loosened policy.
+
+**Two properties of the server-side subscription that are not obvious and have both already caused defects** (`lib/dashboard-stream.ts`, `lib/leads-stream.ts`; `PRD.md` Phase 13 findings 13/14):
+
+- **Realtime is not a replay log.** A row that changes while the channel is still joining is never delivered — there is no catch-up on the wire. Both streams therefore do their own catch-up on `SUBSCRIBED` (the dashboard schedules a snapshot tick; the leads stream emits `resync`). Without it the only repair is the dashboard's `RESNAPSHOT_MS` safety net, and the leads stream has no such net at all.
+- **`removeChannel()` dispatches `CLOSED` back into the `.subscribe()` callback.** If that handler tears down again without having cleared its own channel reference first, it recurses until the stack blows. The trigger is not a network fault but the **last subscriber leaving** — `realtime.disconnect()` never reaches the callback, because supabase-js reconnects the socket beneath it. Both streams clear the reference before calling, and `verify:dashboard` / `verify:leads` force the teardown in-process.
+
+`campaign_leads` and `pipeline_events` carry `REPLICA IDENTITY FULL` (`20260720120500_ops_tables.sql:137-138`), which is what makes `DELETE` payloads include the old row — the leads stream reads `payload.old.id`. An unpaid WAL cost, recorded in `PRD.md` Phase 12's deferrals.
 
 ### 7.3 The one exception: `heartbeat`
 

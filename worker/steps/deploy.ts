@@ -1,10 +1,10 @@
 import { assertEnv } from "@/lib/env"
 import { landingPath } from "@/lib/landing-page"
 import { enqueueSiteSync, getManifestCache, setDeployDirty } from "@/lib/queue"
+import { readStubStepMs } from "@/lib/pipeline-env"
 import {
   abortableDelay,
   PipelineStepError,
-  readStubStepMs,
   ShutdownError,
 } from "@/lib/pipeline-types"
 import { resolveMany } from "@/lib/settings"

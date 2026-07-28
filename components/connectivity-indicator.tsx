@@ -2,7 +2,7 @@
 
 import type { ReactNode } from "react"
 
-import type { DashboardConnectivity } from "@/components/dashboard/use-dashboard-stream"
+import type { DashboardConnectivity } from "@/lib/dashboard-connection"
 import { Badge } from "@/components/ui/badge"
 import { cn } from "@/lib/utils"
 

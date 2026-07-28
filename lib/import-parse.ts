@@ -1,11 +1,8 @@
 import { parse } from "csv-parse/sync"
 
 import {
-  DIRECTORY_HOSTS,
-  DIRECTORY_PATH_PATTERNS,
   FIELD_ALIASES,
   IMPORT_FIELDS,
-  SOCIAL_HOSTS,
   UNMAPPED,
   normalizeHeader,
   type HeaderMapping,
@@ -14,18 +11,9 @@ import {
   type RejectedRow,
   type SkipReason,
 } from "@/lib/import-types"
+import { isSocialOrDirectory, normalizeWebsiteUrl } from "@/lib/website-url"
 
 const UTF8_BOM = "\uFEFF"
-
-const TRACKING_PARAMS = [
-  /^utm_/i,
-  /^fbclid$/i,
-  /^gclid$/i,
-  /^msclkid$/i,
-  /^ref$/i,
-  /^mc_cid$/i,
-  /^mc_eid$/i,
-]
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 
@@ -136,70 +124,7 @@ export function isValidEmail(value: string): boolean {
   return EMAIL_REGEX.test(value.trim())
 }
 
-/** Tech.md §5.2 URL normalization. Returns null when unparseable. */
-export function normalizeWebsiteUrl(raw: string | null | undefined): string | null {
-  if (raw == null) return null
-  let value = raw.trim().replace(/^["']|["']$/g, "")
-  if (!value) return null
-
-  if (!/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(value) && !value.startsWith("//")) {
-    value = `https://${value}`
-  }
-
-  let url: URL
-  try {
-    url = new URL(value)
-  } catch {
-    return null
-  }
-
-  url.hostname = url.hostname.toLowerCase()
-
-  for (const key of [...url.searchParams.keys()]) {
-    if (TRACKING_PARAMS.some((pattern) => pattern.test(key))) {
-      url.searchParams.delete(key)
-    }
-  }
-
-  const isBareHost =
-    !url.pathname.replace(/\/+$/, "") && !url.search && !url.hash
-
-  if (isBareHost) {
-    return `${url.protocol}//${url.host}`
-  }
-
-  return url.href
-}
-
-function hostMatchesSuffix(host: string, suffix: string): boolean {
-  return host === suffix || host.endsWith(`.${suffix}`)
-}
-
-/** Social/directory detection — suffix match on host, path patterns for entries with `/`. */
-export function isSocialOrDirectory(url: string): boolean {
-  let parsed: URL
-  try {
-    parsed = new URL(url)
-  } catch {
-    return false
-  }
-
-  const host = parsed.hostname.toLowerCase().replace(/^www\./, "")
-  const hostPath = `${host}${parsed.pathname}`.replace(/\/+$/, "")
-
-  if (SOCIAL_HOSTS.some((suffix) => hostMatchesSuffix(host, suffix))) {
-    return true
-  }
-
-  if (DIRECTORY_HOSTS.some((suffix) => hostMatchesSuffix(host, suffix))) {
-    return true
-  }
-
-  return DIRECTORY_PATH_PATTERNS.some((pattern) => {
-    const normalized = pattern.replace(/\/+$/, "")
-    return hostPath === normalized || hostPath.startsWith(`${normalized}/`)
-  })
-}
+export { isSocialOrDirectory, normalizeWebsiteUrl }
 
 export type ClassifyResult = {
   rows: ParsedImportRow[]

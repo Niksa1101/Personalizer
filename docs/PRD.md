@@ -833,7 +833,7 @@ Shipped: `dashboard_counts()` RPC (`20260726150000_dashboard_counts_rpc.sql`, fi
 | Criterion | Status | Verified by |
 |---|---|---|
 | Status changes appear within 2 seconds without a refresh | ✅ | `verify:dashboard` SSE leg — DB write → Realtime-pushed frame, measured **928 ms** on the 17/17 run; reported as **skipped** (not passed) without a dev server |
-| Killing the socket falls back to polling and recovers | ✅ | `lib/dashboard-connection.ts` state machine (`live` / `polling` / `unreachable`); `verify:dashboard` polling + reconnect legs **when dev server running**; reported as **skipped** without server |
+| Killing the socket falls back to polling and recovers | ✅ | **Both halves now forced, not assumed.** Server side: `verify:dashboard` channel-lifecycle legs — `realtime socket kill recovers` (`realtime.disconnect()` under a live subscriber, then a write must still arrive inside `RESNAPSHOT_MS`), `channel teardown does not recurse`, `channel rebuilt after teardown`. Client side: `lib/dashboard-connection.ts` state machine + `verify:leads-ui` `stream loss degrades to polling and recovers` (Chromium offline → `Polling` → back online → `Live`). The old polling + reconnect legs only ever aborted the *client*, which is why finding 14 stayed latent |
 | Counts match the database exactly under "All campaigns" and per campaign | ✅ | `verify:dashboard` — per-campaign row-for-row + all-campaigns delta (hermetic DB legs) |
 
 **Review fixes (2026-07-26):** client silence timer now resets on every stream byte (heartbeat comments count as liveness); silence and error paths schedule reconnect; polling stops on stream recovery; Realtime channel status monitored with safety-net re-snapshot; ETA samples campaign-scoped with most-recent ordering; batch headline `complete = done + failed`; verify script uses honest skip state and exercises Realtime on the latency leg.
@@ -849,19 +849,71 @@ Shipped: `dashboard_counts()` RPC (`20260726150000_dashboard_counts_rpc.sql`, fi
 
 **Open item recorded:** `listCampaigns()` still loads every `campaign_leads` row with no pagination (PostgREST 1000-row cap) — same class as Phase 11 review finding 8; `dashboard_counts()` is now one step away from fixing it, deferred intentionally.
 
-Verified by `npm run typecheck`, `npm run lint`, `npm test` (**229 tests**), `npm run verify:dashboard` — **18/18 with the dev server running and no skips** — and `npm run verify:schema` (**6/6**). Without a dev server the three live legs report **skipped**, not passed, and the run is 15/15. `NEXT_PUBLIC_SUPABASE_ANON_KEY` is now set locally and documented in `.env.example` as verification-only, which is what re-armed the anon-grant check in both scripts.
+Verified by `npm run typecheck`, `npm run lint`, `npm test` (**229 tests**), `npm run verify:dashboard` — **18/18 with the dev server running and no skips**, now **21/21** with the channel-lifecycle legs added on 2026-07-27 — and `npm run verify:schema` (**6/6**). Without a dev server the three live legs report **skipped**, not passed — 15/15 as originally shipped, **18/18** now, since the channel-lifecycle legs are in-process and need no server. `NEXT_PUBLIC_SUPABASE_ANON_KEY` is now set locally and documented in `.env.example` as verification-only, which is what re-armed the anon-grant check in both scripts.
 
 ---
 
-#### Phase 13 — Leads table and drawer
+#### Phase 13 — Leads table and drawer ✅ **DONE** (2026-07-27)
 
-TanStack table per §6.3, all filters and sorts, bulk actions, and the full detail drawer including timeline, both players, per-step retry, and error display with screenshots.
+TanStack table per §6.3, server-side filters/sort/pagination (50/page), bulk retry/delete, SSE live patches via `/api/stream/leads`, and the full detail drawer (timeline, both players, per-step retry, edit + re-queue, unpublish, remove-from-campaign with retain).
 
-**Also ships (deferred UI from Phase 11):** per-page unpublish action setting `deploy_status='removed'` and enqueueing `site-sync` — the manifest omission mechanism shipped in Phase 11; Phase 13 adds the button only. Lead-level delete with the retain checkbox via a sibling RPC over `snapshot_live_pages()` (`delete_campaign_retaining_pages` pattern, D87).
+| Exit criterion | Verified by |
+|---|---|
+| 500 rows filter/sort without lag | `verify:leads` — **100 ms worst case** across all eight sort columns *and* a search term (500 rows, 50/page); 100–160 ms across runs. Deliberately the worst, not a single `updated_at`-only sample: the embedded-column sorts (`leads.*`, `campaigns.name`) are the ones D1 flagged as able to fight back. This is D11's revisit baseline. |
+| Drawer plays both videos | `verify:leads` media legs, **27/27 with a dev server running** — 200, Range 206 with `Content-Range`, 401 unauthenticated, non-image 404, and path containment against a real on-disk fixture; `verify:leads-ui` proves the drawer renders. In-drawer **playback** is still the one criterion no automated leg touches (`Tech.md` §17 item 12). |
+| Per-step retry re-runs exactly that step | `verify:leads` 23514 + `buildRetryPatch` unit test |
+| Edit URL + re-queue end to end | `verify:leads` `updateLead` legs + skipped re-queue; `lib/lead-edit.test.ts` |
 
-> The sibling delete RPC **must** write a `pending_site_sync` row in its own transaction, exactly as the campaign-level one does (`DB.md` §5.15) — otherwise it reintroduces the Redis-outage hole closed by Phase 11 review finding 6. Re-publishing an unpublished page is already handled: `deploy_status='removed'` reads as stale to the deploy step (`DB.md` §2.5).
+Also ships: `delete_lead_retaining_pages`, `unpublish_landing_page`, `lib/lead-actions.ts`, `lib/error-copy.ts`, `components/leads/drawer-actions.tsx`, `npm run verify:leads`, and `npm run verify:leads-ui` (**9/9**, ×2 consecutive — Chromium against the real screen; needs the dev server, reports **skipped** without one).
 
-**Exit:** 500 rows filter and sort without lag. The drawer plays both videos. Per-step retry re-runs exactly that step. Editing a lead's URL and re-queuing works end to end.
+#### Review findings (Phase 13)
+
+**Blocking (2026-07-27 review pass)**
+
+1. **`verify:leads` false-green** — early `fail(); return` inside `try` skipped the exit-code block; fixed with `process.exitCode = 1` inside `fail()` itself.
+2. **Search crash / silent miss** — PostgREST `.or()` values now quoted (not backslash-escaped); comma and `%`/`_` literals verified in `verify:leads`.
+3. **Table never refreshed after mutations** — `router.refresh()` props were frozen in local `result` state; server totals read from props, row patches re-seeded on prop change.
+4. **Realtime connection churn** — `use-leads-stream` effect deps collapsed to `[scopeKey]` with ref-latched callbacks; polling starts/stops on degrade/recover; server emits `resync` on channel join and scopes insert events by `campaign_id`.
+
+**Important**
+
+5. **Edit form** — empty strings map to null; `pip_scale` bounds 0.05–0.60; `requeueLeadAction(id)` derives mode server-side; domain conflict surfaces `conflictRef`.
+6. **D67 drawer actions** — `ACTION_CONTROLS` total map; error block renders for any `error_code`, not only `failed`.
+7. **Verification depth** — media routes, path containment, stream scope, `updateLead` legs, runId-scoped fixture cleanup, widened perf leg.
+
+**Found by re-reviewing the fixes**
+
+8. **Skipped re-queue 409'd** — moving the mode derivation server-side dropped D39's special case. A `skipped` lead derived `resume` (or `restart`, once a URL-change note existed), and `canRetry` admits `skipped` only for `step=recording`, so the drawer's primary affordance for `not_a_website` failed outright. `deriveRequeueModeForLead` now reads `status` and short-circuits. The old leg called `retryCampaignLead` directly and so never saw this; it now drives `deriveRequeueModeForLead` → `requeueLead`, the real button path.
+9. **"URL changed" was inferred from an unbounded event-log search** — an `ilike` over `pipeline_events.message` with no time bound matched forever, so every later re-queue derived `restart` (a full re-record) after a name-only edit. Now bounded to `created_at > queued_at` — "changed *since last queued*" — and the message literal is a shared constant, so the two writers and the reader cannot drift.
+10. **Stream reconnect backoff was inert** — `connect()` reset `reconnectAttempt` and claimed `live` when the `EventSource` was *constructed*, so every failed attempt looked like a fresh success: a 1 s hot loop against a dead server with the indicator flickering. Reset moved to `source.onopen`; polling now also runs until the socket actually opens.
+11. **`verify:leads` passed every check and then hung forever** — retry legs enqueue, which constructs the shared ioredis client; with Redis down its reconnect loop outlives `closeQueueConnections()`. The old `process.exit(1)` had masked this, and finding 1 removed it. Now exits explicitly after the summary, where teardown is fully awaited and finding 12's truncation objection does not apply.
+
+**Found only by running against a live dev server** — every one of these was green in `npm test`, `typecheck`, and lint
+
+12. **Every media route returned 500** — `loadCampaignLeadMediaContext` embedded `videos` ambiguously (`campaign_leads.video_id → videos.id` *and* `videos.campaign_lead_id → campaign_leads.id`), so PostgREST refused with `PGRST201`. The shared helper threw before any route logic ran. Fixed with `videos!campaign_leads_video_fk`, the same disambiguation `LEAD_LIST_SELECT` already uses for `landing_pages`.
+13. **The leads stream stack-overflowed on every channel close** — `supabase.removeChannel()` dispatches `CLOSED` to the `.subscribe()` callback, and that handler calls `removeChannel(state)` again; because `state.channel = null` ran after the removal call, the re-entrant call still saw a live channel and recursed until `RangeError: Maximum call stack size exceeded`. Fixed by detaching the reference first. **Now covered** by four in-process legs in `verify:leads` (`leads channel emits resync on join`, `… resyncs after a socket kill`, `… teardown does not recurse`, `… rebuilt after teardown`), added 2026-07-27 so the two streams cannot drift back into the asymmetry that hid finding 14 — this defect was found by hand here, and its twin then survived an 18/18 run there. The teardown leg was confirmed to fail against the reintroduced bug.
+14. **`lib/dashboard-stream.ts` has the identical bug**, latent since Phase 12 and fixed here too. `verify:dashboard` was green because nothing in it forced a channel error — Phase 12's second exit criterion was therefore not genuinely covered, since its stream legs only ever exercised a healthy channel. **Closed on 2026-07-27** by three in-process legs in `verify:dashboard` (see the Phase 12 exit table). Two notes from building them: `realtime.disconnect()` does *not* reach the `.subscribe()` callback (supabase-js reconnects the socket beneath it) — the CLOSED path is `removeChannel()`, i.e. the **last subscriber leaving**, so the trigger was ordinary teardown rather than a network fault; and the recursion surfaces as a burst of unhandled `RangeError`s through the promise supabase-js returns, not as a throw at the call site, so the leg listens on `unhandledRejection`. Each leg was confirmed to fail against the reintroduced defect before being kept.
+15. **The path-containment leg had never tested containment.** Three defects stacked: the route was 500ing; the fixture `recordings` row pointed at a file that was never written, so everything 404'd and the leg passed for the wrong reason; and the traversal setup UPDATE was unchecked. The payload `../../etc/passwd` is an LFI signature that **Cloudflare's WAF in front of Supabase rejects with 403 + HTML**, so the value never reached Postgres. Now uses `../../escaped-by-verify.mp4` — still escapes `LOCAL_STORAGE_ROOT`, and stronger, because a `.mp4` extension means the content-type check cannot 404 it and containment is the only gate. The leg also asserts its own setup landed.
+16. **The re-queue cutoff compared two different clocks** (introduced by finding 9's fix). `campaign_leads.queued_at` is stamped from the app clock (`pipeline-control.ts:54`) while `pipeline_events.created_at` defaults to the database clock, so sub-second skew flipped the derivation — it passed three consecutive runs and failed the fourth. The cutoff is now the last `resumed` event: same table, same clock.
+
+**Found only by driving the actual interface** — `npm run verify:leads-ui` (Playwright/Chromium, `scripts/verify-leads-ui.ts`). Every one of these was green in `npm test`, `typecheck`, `lint`, `verify:leads`, and `verify:dashboard`, which is the point: the two worst findings of this review (3 and 4) were both client-side, and nothing in the suite had ever rendered the table.
+
+17. **Ticking a row's selection checkbox also opened that lead's drawer.** The select cell guards with `onClick={(e) => e.stopPropagation()}`, and that cannot work: Base UI's `CheckboxRoot` renders its hidden `<input>` as a **sibling** of the `<span role="checkbox">` and, on click, *dispatches a brand-new* `PointerEvent('click', { bubbles: true })` on that input (`@base-ui/react/checkbox/root/CheckboxRoot.js:322`). `stopPropagation` stops the original event; the synthetic one is a different event on a different node and reaches `TableRow` regardless. So every attempt to select rows for a bulk action opened and re-opened drawers. Fixed by making the row opt out by origin — `TableCell` now carries `data-column`, and the row handler ignores clicks inside `[data-column="select"]`. `leads-table.tsx` is the only clickable ancestor containing a `Checkbox`; the other three usages are inside dialogs.
+18. **The `leads_identifiable_ck` message named a remedy that cannot satisfy it.** Clearing a lead's website URL nulls `domain`, and the constraint is `domain IS NOT NULL OR email IS NOT NULL` (`core_tables.sql:124`). The copy said "A lead must have a company name, website URL, or domain" — company name is not in the constraint, and `email`, the one alternative that *is*, went unmentioned. An operator would edit a field that could never clear the error. Now: "A lead needs a website URL or an email address — clearing both leaves nothing to dedupe on", with a leg for each side (cleared successfully when an email exists; refused with usable copy when the URL is the only identifier).
+19. **A stream that dies silently takes `SILENCE_MS` to be noticed.** Measured at **25.3–25.4 s** across runs: with the socket dropped underneath it, the `EventSource` never fires `error`, so the only degrade path left is the silence timer. Behaviour matches the design and the criterion is met, but the indicator reads `Live` over frozen rows for that whole window. Recorded, not changed — shortening it trades against heartbeat cost, which belongs with Phase 14's worker-down indicator.
+
+Also verified green through the UI, having previously been asserted only server-side: bulk delete refreshing the table without a reload (finding 3), opening a drawer adding **no** new SSE connection (finding 4 — one connection, unchanged), the new-leads pill adding rows, the `intro_missing` → `/intros` link, and a name-only edit re-queueing at its existing step instead of rewinding to `recording` (findings 9/16 — the stale-note trap is seeded deliberately).
+
+**Deferrals**
+
+- Near-duplicate connection logic between `use-leads-stream.ts` and `lib/dashboard-connection.ts` (declined shared machine per D24 — revisit if Phase 14 adds a third stream).
+- In-drawer video playback is still the one Phase 13 criterion no automated leg touches: `verify:leads` proves the byte-range routes, `verify:leads-ui` proves the drawer renders, but neither presses play.
+- Three copies of `zodFieldErrors` / `actionError` across campaigns, leads, and intros action files (shared home needs a non-`"use server"` module; out of scope).
+- `lib/leads-stream.ts` has no periodic safety net and gives up on Realtime permanently after `MAX_CHANNEL_BACKOFF_ATTEMPTS`, so the leads table's liveness rests entirely on the client's polling — a thinner guarantee than the dashboard's, and not surfaced in the UI (`Tech.md` §17 item 11).
+
+**Verified (2026-07-27, after the review fixes above):** `npm run typecheck` ✅, `npm run lint` ✅ (1 pre-existing `useReactTable` warning), `npm test` ✅ **256/256**, `npm run verify:leads` **27/27**, `npm run verify:leads-ui` **9/9** (×2 consecutive), `npm run verify:dashboard` **21/21** (×2 consecutive), `npm run verify:schema` **6/6**, `npm run verify:server-only` **3/3**. Fixture cleanup confirmed by querying for orphans after the runs — zero campaigns, zero leads.
+
+Every leg added in this pass was checked against the reintroduced defect before being kept, and **that check is not a formality**: two legs that read as meaningful had no teeth. `channel rebuilt after teardown` passes against the very stack overflow it was written for, because the buggy `removeChannel` still cleared `state.channel` before the recursion unwound. It is kept as a general guard, but `channel teardown does not recurse` is the leg that actually catches finding 14.
 
 ---
 
@@ -878,6 +930,8 @@ The three remaining screens: §6.4, §6.7, §6.8. Including the worker-down indi
 Bulk `Deployed` → `Ready` promotion, and `GET /api/export` per `Tech.md` §12 — UTF-8 with BOM, defaulting to `Ready`.
 
 **Exit:** the exported CSV opens correctly in Excel with intact accents. Every URL in it resolves (**AC-2**).
+
+> **AC-2 hazard from Phase 13 unpublish.** Unpublish keeps `netlify_url` on the lead while setting `landing_pages.deploy_status='removed'`. Export must not emit dead URLs for those rows — join `landing_pages` and skip or flag `deploy_status='removed'` even when `status='ready'`.
 
 ---
 

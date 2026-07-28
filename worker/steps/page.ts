@@ -1,7 +1,7 @@
+import { readStubStepMs } from "@/lib/pipeline-env"
 import {
   abortableDelay,
   PipelineStepError,
-  readStubStepMs,
   ShutdownError,
 } from "@/lib/pipeline-types"
 

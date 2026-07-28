@@ -1,6 +1,7 @@
 import "server-only"
 
 import type { Database } from "@/lib/database.types"
+import { buildRetryPatch, canRetry, type RetryPatch } from "@/lib/lead-actions"
 import { enqueueLead } from "@/lib/queue"
 import type { PipelineStep } from "@/lib/pipeline-types"
 import { getSupabaseAdmin } from "@/lib/supabase"
@@ -43,11 +44,7 @@ async function logEnqueueDidNotLand(campaignLeadId: string): Promise<void> {
 
 async function transitionToQueued(
   campaignLeadId: string,
-  patch: {
-    current_step?: PipelineStep
-    video_id?: string | null
-    landing_page_id?: string | null
-  },
+  patch: RetryPatch,
 ): Promise<void> {
   const update: Database["public"]["Tables"]["campaign_leads"]["Update"] = {
     status: "queued",
@@ -118,46 +115,13 @@ export async function resumePausedLeadsForCampaigns(
   }
 }
 
-async function resetForcedDeployState(campaignLeadId: string): Promise<void> {
-  const { data: lead, error } = await getSupabaseAdmin()
-    .from("campaign_leads")
-    .select("id, landing_page_id")
-    .eq("id", campaignLeadId)
-    .maybeSingle()
-
-  if (error) {
-    throw new Error(`Failed to load campaign lead for deploy reset: ${error.message}`)
-  }
-  if (!lead) {
-    throw new PipelineControlError(404, "Campaign lead not found")
-  }
-
-  const { data: updatedLead, error: leadUpdateError } = await getSupabaseAdmin()
-    .from("campaign_leads")
-    .update({
-      netlify_url: null,
-      deployed_at: null,
-      deployed_dry_run: false,
-    })
-    .eq("id", campaignLeadId)
-    .select("id")
-    .maybeSingle()
-
-  if (leadUpdateError) {
-    throw new Error(
-      `Failed to reset lead deploy state: ${leadUpdateError.message}`,
-    )
-  }
-  if (!updatedLead) {
-    throw new Error("Failed to reset lead deploy state: no row updated")
-  }
-
-  if (!lead.landing_page_id) return
-
+async function resetLandingPageForRedeploy(
+  landingPageId: string,
+): Promise<void> {
   const { data: updatedPage, error: pageUpdateError } = await getSupabaseAdmin()
     .from("landing_pages")
-    .update({ deploy_status: "pending" })
-    .eq("id", lead.landing_page_id)
+    .update({ deploy_status: "pending", unpublished_at: null })
+    .eq("id", landingPageId)
     .select("id")
     .maybeSingle()
 
@@ -178,7 +142,7 @@ export async function retryCampaignLead(
 ): Promise<void> {
   const { data: lead, error } = await getSupabaseAdmin()
     .from("campaign_leads")
-    .select("id, status")
+    .select("id, status, landing_page_id")
     .eq("id", campaignLeadId)
     .maybeSingle()
 
@@ -189,39 +153,17 @@ export async function retryCampaignLead(
     throw new PipelineControlError(404, "Campaign lead not found")
   }
 
-  const retryableStatuses: LeadStatus[] = ["failed", "paused", "deployed", "processing"]
-  if (!retryableStatuses.includes(lead.status)) {
+  if (!canRetry(lead.status as LeadStatus, mode, step)) {
     throw new PipelineControlError(
       409,
       `Lead status '${lead.status}' cannot be retried`,
     )
   }
 
-  const patch: {
-    current_step?: PipelineStep
-    video_id?: string | null
-    landing_page_id?: string | null
-  } = {}
-  if (mode === "restart") {
-    // Polarity inversion vs record.ts: restart clears video_id but keeps
-    // recording_id so the record step re-captures and merge re-encodes.
-    patch.current_step = "recording"
-    patch.video_id = null
-    patch.landing_page_id = null
-  } else if (mode === "step") {
-    if (!step) {
-      throw new PipelineControlError(400, "step is required for mode=step")
-    }
-    patch.current_step = step
-    if (step === "merge") {
-      patch.video_id = null
-    }
-    if (step === "page") {
-      patch.landing_page_id = null
-    }
-    if (step === "deploy") {
-      await resetForcedDeployState(campaignLeadId)
-    }
+  const patch = buildRetryPatch(mode, step)
+
+  if (mode === "step" && step === "deploy" && lead.landing_page_id) {
+    await resetLandingPageForRedeploy(lead.landing_page_id)
   }
 
   await transitionToQueued(campaignLeadId, patch)

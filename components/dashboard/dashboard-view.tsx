@@ -9,7 +9,7 @@ import { CampaignScopeSelect } from "@/components/dashboard/campaign-scope-selec
 import {
   ConnectivityIndicator,
   DashboardDimmer,
-} from "@/components/dashboard/connectivity-indicator"
+} from "@/components/connectivity-indicator"
 import { FailureBuckets } from "@/components/dashboard/failure-buckets"
 import { NeedsIntroBanner } from "@/components/dashboard/needs-intro-banner"
 import { ProcessingList } from "@/components/dashboard/processing-list"
