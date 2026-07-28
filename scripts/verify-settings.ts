@@ -67,6 +67,9 @@ async function runEnvLeakLeg(): Promise<void> {
     env[name] = shapedSentinel(name)
   }
   env.PORT = "3111"
+  // Its own distDir means its own dev lock, so this boots even while a dev
+  // server is running in the same directory. See next.config.ts.
+  env.NEXT_DIST_DIR = ".next-sentinel"
 
   let child: ChildProcess | null = null
   let bootOutput = ""

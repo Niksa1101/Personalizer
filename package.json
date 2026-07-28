@@ -29,9 +29,11 @@
     "verify:queue": "tsx --conditions react-server --env-file-if-exists=.env.local scripts/verify-queue.ts",
     "verify:queue-ui": "tsx --conditions react-server --env-file-if-exists=.env.local scripts/verify-queue-ui.ts",
     "verify:logs": "tsx --conditions react-server --env-file-if-exists=.env.local scripts/verify-logs.ts",
+    "verify:logs-ui": "tsx --conditions react-server --env-file-if-exists=.env.local scripts/verify-logs-ui.ts",
     "verify:schema": "tsx --env-file-if-exists=.env.local scripts/verify-schema.ts",
     "check:urls": "tsx scripts/check-urls.ts",
     "setup:browser": "playwright install chromium",
+    "redis:up": "docker start personalizer-redis || docker run -d --name personalizer-redis --restart unless-stopped -p 6379:6379 redis:7-alpine",
     "verify:server-only": "tsx scripts/verify-server-only.ts",
     "lint": "eslint"
   },

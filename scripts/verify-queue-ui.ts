@@ -9,6 +9,7 @@ import { createClient } from "@supabase/supabase-js"
 import type { Database } from "../lib/database.types"
 import { assertEnvOrExit } from "../lib/env-node"
 import { closeQueueConnections } from "../lib/queue"
+import { closeHealthRedis, probeRedisHealth } from "../lib/queue-health"
 import { pendingJobIds, removeJobsThisRunOrphaned } from "./queue-sweep"
 import {
   countRequests,
@@ -39,6 +40,20 @@ async function main(): Promise<void> {
     skip("all legs", "dev server not reachable")
     printUiSummary(results)
     process.exit(0)
+  }
+
+  // pendingJobIds and the worker leg both need Redis; without this the script
+  // crashed here instead of skipping whenever the dev server was up but Redis
+  // was not.
+  if ((await probeRedisHealth()) === "down") {
+    skip("all legs", "redis not reachable — start it with `npm run redis:up`")
+    printUiSummary(results)
+    await closeHealthRedis()
+    // Returning rather than process.exit(0): by this point probeServer has an
+    // open keep-alive socket, and forcing the exit on top of it trips a libuv
+    // assertion on Windows (`!(handle->flags & UV_HANDLE_CLOSING)`), which
+    // surfaces as exit code -1073740791 after a clean-looking summary.
+    return
   }
 
   const login = await loginSessionCookie(env.APP_PASSWORD)

@@ -71,7 +71,7 @@ async function main(): Promise<void> {
   // the worker child. Skip out rather than crashing so a run without Redis
   // reports honestly and exits 0.
   if ((await probeRedisHealth()) === "down") {
-    skip("all legs", "redis not reachable")
+    skip("all legs", "redis not reachable — start it with `npm run redis:up`")
     printSummary()
     await closeHealthRedis()
     return
