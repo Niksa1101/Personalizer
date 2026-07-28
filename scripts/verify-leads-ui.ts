@@ -17,6 +17,8 @@ import { createClient } from "@supabase/supabase-js"
 import type { Database } from "../lib/database.types"
 import { SILENCE_MS } from "../lib/dashboard-connection"
 import { assertEnvOrExit } from "../lib/env-node"
+import { closeQueueConnections } from "../lib/queue"
+import { pendingJobIds, removeJobsThisRunOrphaned } from "./queue-sweep"
 import { SESSION_COOKIE_NAME } from "../lib/session"
 
 interface CheckResult {
@@ -166,6 +168,10 @@ async function main(): Promise<void> {
   let campaignId: string | null = null
   const leadIds: string[] = []
   let browser: Browser | null = null
+  // The re-queue leg enqueues through the dev server, so this script leaks
+  // pipeline jobs exactly like verify:leads does — just from the other side of
+  // the HTTP boundary.
+  const pendingJobIdsAtStart = await pendingJobIds()
 
   try {
     const { data: campaign, error: campaignError } = await supabase
@@ -762,6 +768,11 @@ async function main(): Promise<void> {
     for (const leadId of leadIds) {
       await supabase.from("leads").delete().eq("id", leadId)
     }
+
+    // Strictly after the row deletions: the sweep decides what to drop by
+    // asking which campaign_leads still exist.
+    await removeJobsThisRunOrphaned(supabase, pendingJobIdsAtStart)
+    await closeQueueConnections()
   }
 
   summarize()
@@ -778,7 +789,17 @@ function summarize(): void {
   )
 }
 
-main().catch((error) => {
-  console.error(error)
-  process.exitCode = 1
-})
+main()
+  .catch((error) => {
+    console.error(error)
+    process.exitCode = 1
+  })
+  .finally(() => {
+    // Mirrors verify:leads. The queue sweep opens a Redis connection, and with
+    // Redis unreachable the ioredis reconnect loop outlives
+    // closeQueueConnections() and keeps the event loop alive forever — the
+    // script would print its summary and then hang (Phase 13 finding 11).
+    // Safe here and only here: teardown is fully awaited above, so there is no
+    // in-flight work left to truncate.
+    process.exit(results.some((result) => result.state === "fail") ? 1 : 0)
+  })
