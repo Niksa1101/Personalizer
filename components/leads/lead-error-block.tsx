@@ -7,6 +7,7 @@ import {
   type DrawerActionContext,
 } from "@/components/leads/drawer-actions"
 import { errorCopyFor } from "@/lib/error-copy"
+import type { DrawerAction } from "@/lib/error-copy"
 import type { ErrorCode } from "@/lib/pipeline-types"
 import type { LeadStatus } from "@/lib/campaign-types"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
@@ -18,6 +19,7 @@ type LeadErrorBlockProps = {
   status: LeadStatus
   campaignLeadId: string
   websiteUrl: string | null
+  pausedReason?: { sentence: string; createdAt: string } | null
   pinned?: boolean
   onDeleteDuplicate?: () => void
 }
@@ -29,12 +31,12 @@ export function LeadErrorBlock({
   status,
   campaignLeadId,
   websiteUrl,
+  pausedReason,
   pinned,
   onDeleteDuplicate,
 }: LeadErrorBlockProps) {
-  if (!errorCode) return null
+  if (!errorCode && !pausedReason) return null
 
-  const copy = errorCopyFor(errorCode)
   const ctx: DrawerActionContext = {
     campaignLeadId,
     status,
@@ -42,16 +44,33 @@ export function LeadErrorBlock({
     onDeleteDuplicate,
   }
 
+  if (errorCode) {
+    const copy = errorCopyFor(errorCode)
+    return (
+      <Alert variant={status === "failed" || pinned ? "destructive" : "default"}>
+        <AlertTitle>{copy.sentence}</AlertTitle>
+        <AlertDescription className="space-y-2">
+          {errorDetail ? <p>{errorDetail}</p> : null}
+          <p className="text-xs opacity-80">
+            {copy.bucket.replace("_", " ")} · {attemptCount} attempt
+            {attemptCount === 1 ? "" : "s"} on this step
+          </p>
+          <div>{ACTION_CONTROLS[copy.action.id](ctx)}</div>
+        </AlertDescription>
+      </Alert>
+    )
+  }
+
+  const action: DrawerAction = { id: "resume" }
+
   return (
-    <Alert variant={status === "failed" || pinned ? "destructive" : "default"}>
-      <AlertTitle>{copy.sentence}</AlertTitle>
+    <Alert variant="default">
+      <AlertTitle>{pausedReason!.sentence}</AlertTitle>
       <AlertDescription className="space-y-2">
-        {errorDetail ? <p>{errorDetail}</p> : null}
         <p className="text-xs opacity-80">
-          {copy.bucket.replace("_", " ")} · {attemptCount} attempt
-          {attemptCount === 1 ? "" : "s"} on this step
+          Paused · {attemptCount} attempt{attemptCount === 1 ? "" : "s"} on this step
         </p>
-        <div>{ACTION_CONTROLS[copy.action.id](ctx)}</div>
+        <div>{ACTION_CONTROLS[action.id](ctx)}</div>
       </AlertDescription>
     </Alert>
   )

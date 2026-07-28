@@ -131,7 +131,7 @@ export function LeadDrawer({
               </SheetHeader>
 
               <div className="space-y-6 pb-8">
-                {detail.error_code ? (
+                {detail.error_code || detail.pausedReason ? (
                   <LeadErrorBlock
                     errorCode={detail.error_code}
                     errorDetail={detail.error_detail}
@@ -139,6 +139,7 @@ export function LeadDrawer({
                     status={detail.status}
                     campaignLeadId={detail.id}
                     websiteUrl={detail.leads.website_url}
+                    pausedReason={detail.pausedReason}
                     pinned={detail.status === "failed"}
                     onDeleteDuplicate={onClose}
                   />

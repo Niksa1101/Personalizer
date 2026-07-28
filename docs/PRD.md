@@ -921,11 +921,21 @@ Every leg added in this pass was checked against the reintroduced defect before 
 
 ---
 
-#### Phase 14 — Queue, Logs, Settings
+#### Phase 14 — Queue, Logs, Settings ✅ **DONE** (2026-07-28)
 
 The three remaining screens: §6.4, §6.7, §6.8. Including the worker-down indicator, log filtering with expandable traces, settings editing with env health (values never rendered).
 
-**Exit:** stopping the worker surfaces a clear indicator within 10 seconds. Every setting is editable and takes effect without a restart. No env *value* appears anywhere in the DOM.
+| Exit criterion | Verified by |
+|---|---|
+| Stopping the worker surfaces a clear indicator within 10 seconds | `verify:queue-ui` Q-3 (`worker down surfaces within 10s`); `verify:queue` beat TTL + kill legs |
+| Every setting is editable and takes effect without a restart | `verify:settings` TTL + concurrency echo in `verify:queue`; dry-run round-trip legs |
+| No env *value* appears anywhere in the DOM | `verify:settings` `env leak sentinel boot` on `/settings` HTML + RSC flight |
+
+**Review fixes (2026-07-28):** 28 findings across Settings, Queue, and Logs — blocking fixes include `deploy.dry_run` boolean parsing, shared throttled health polling (`lib/queue-health-poller.ts` + `lib/queue-health-store.ts`), and Queue lead links using `campaign_lead` UUIDs. Site-sync `lastResult` now reads a Redis key (`pz:sitesync:last`) written by the worker; resets to `unknown` on Redis flush.
+
+**Deferrals:** `verify-leads-ui` harness migration (Phase 15 cleanup, same class as dashboard/leads stream dedup).
+
+Verified by `npm run typecheck`, `npm run lint`, `npm test` (**262 tests** — 256 Phase 13 + 6 new), `npm run verify:server-only`, `npm run verify:settings`, `npm run verify:queue`, `npm run verify:queue-ui`, `npm run verify:logs`, plus regression `verify:leads` 27, `verify:leads-ui` 9, `verify:dashboard` 21, `verify:schema` 6.
 
 ---
 
