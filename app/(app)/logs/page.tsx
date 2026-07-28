@@ -1,19 +1,30 @@
-import { ScrollText } from "lucide-react"
-
-import { EmptyState } from "@/components/empty-state"
+import { LogsView } from "@/components/logs/logs-view"
+import {
+  parseLogFilters,
+  serializeLogFilters,
+  type LogsSearchParams,
+} from "@/lib/log-filters"
+import { listLogs } from "@/lib/logs"
 
 export const metadata = {
   title: "Logs",
 }
 
-export default async function LogsPage() {
+type LogsPageProps = {
+  searchParams: Promise<LogsSearchParams>
+}
+
+export default async function LogsPage({ searchParams }: LogsPageProps) {
+  const params = await searchParams
+  const filters = parseLogFilters(params)
+  const result = await listLogs(filters)
+
   return (
-    <div className="flex flex-1 flex-col items-center justify-center p-6">
-      <EmptyState
-        icon={<ScrollText />}
-        title="No logs yet"
-        description="System logs — stack traces, FFmpeg stderr, and deploy responses — will appear here as the pipeline runs."
-      />
-    </div>
+    <LogsView
+      key={serializeLogFilters(filters).toString()}
+      initialResult={result}
+      filters={filters}
+      loadedAt={new Date().toISOString()}
+    />
   )
 }

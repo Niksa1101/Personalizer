@@ -95,6 +95,7 @@ export type LeadDetail = LeadListRow & {
   recording: RecordingRow | null
   otherCampaigns: Array<{ id: string; name: string; ref: string }>
   maxStretchFactor: number
+  pausedReason: { sentence: string; createdAt: string } | null
 }
 
 export type CampaignOption = {
@@ -322,13 +323,28 @@ export async function getLeadDetail(
       return campaign ? [campaign] : []
     }) ?? []
 
+  const events = eventsResult.data ?? []
+  const pausedReason =
+    row.status === "paused" && !row.error_code
+      ? (() => {
+          const latestPaused = events.find((event) => event.kind === "paused")
+          return latestPaused
+            ? {
+                sentence: latestPaused.message,
+                createdAt: latestPaused.created_at,
+              }
+            : null
+        })()
+      : null
+
   return {
     ...row,
-    events: eventsResult.data ?? [],
+    events,
     video: videoResult.data,
     recording: recordingResult.data,
     otherCampaigns,
     maxStretchFactor: settings["merge.max_stretch_factor"],
+    pausedReason,
   }
 }
 
