@@ -2,108 +2,27 @@ import "server-only"
 
 import { cache } from "react"
 
+import {
+  MERGE_LAYOUT_SET,
+  SETTING_DEFAULTS,
+  SETTING_KEYS,
+  type MergeLayout,
+  type SettingKey,
+  type SettingValues,
+} from "@/lib/settings-schema"
 import { getSupabaseAdmin } from "@/lib/supabase"
 
-export type MergeLayout =
-  | "bubble_br"
-  | "bubble_bl"
-  | "bubble_tr"
-  | "bubble_tl"
-  | "rect_br"
-  | "fullscreen_intro"
-
-export type SettingKey =
-  | "recorder.viewport_width"
-  | "recorder.viewport_height"
-  | "recorder.nav_timeout_ms"
-  | "recorder.scroll_ease_ms"
-  | "recorder.post_load_delay_ms"
-  | "recorder.retention_days"
-  | "merge.pip_scale"
-  | "merge.layout"
-  | "merge.max_stretch_factor"
-  | "encode.web_crf"
-  | "encode.web_audio_kbps"
-  | "encode.merge_timeout_ms"
-  | "queue.concurrency"
-  | "queue.auto_retry_limit"
-  | "deploy.dry_run"
-  | "deploy.timeout_ms"
-
-export type SettingValues = {
-  "recorder.viewport_width": number
-  "recorder.viewport_height": number
-  "recorder.nav_timeout_ms": number
-  "recorder.scroll_ease_ms": number
-  "recorder.post_load_delay_ms": number
-  "recorder.retention_days": number
-  "merge.pip_scale": number
-  "merge.layout": MergeLayout
-  "merge.max_stretch_factor": number
-  "encode.web_crf": number
-  "encode.web_audio_kbps": number
-  "encode.merge_timeout_ms": number
-  "queue.concurrency": number
-  "queue.auto_retry_limit": number
-  "deploy.dry_run": boolean
-  "deploy.timeout_ms": number
-}
-
-export const SETTING_KEYS = [
-  "recorder.viewport_width",
-  "recorder.viewport_height",
-  "recorder.nav_timeout_ms",
-  "recorder.scroll_ease_ms",
-  "recorder.post_load_delay_ms",
-  "recorder.retention_days",
-  "merge.pip_scale",
-  "merge.layout",
-  "merge.max_stretch_factor",
-  "encode.web_crf",
-  "encode.web_audio_kbps",
-  "encode.merge_timeout_ms",
-  "queue.concurrency",
-  "queue.auto_retry_limit",
-  "deploy.dry_run",
-  "deploy.timeout_ms",
-] as const satisfies readonly SettingKey[]
-
-/** Seed defaults from DB.md §5.12 — used when a key is absent from the DB. */
-export const SETTING_DEFAULTS: SettingValues = {
-  "recorder.viewport_width": 1920,
-  "recorder.viewport_height": 1080,
-  "recorder.nav_timeout_ms": 120_000,
-  "recorder.scroll_ease_ms": 800,
-  "recorder.post_load_delay_ms": 1500,
-  "recorder.retention_days": 30,
-  "merge.pip_scale": 0.2,
-  "merge.layout": "bubble_br",
-  "merge.max_stretch_factor": 2.5,
-  "encode.web_crf": 28,
-  "encode.web_audio_kbps": 96,
-  "encode.merge_timeout_ms": 1_800_000,
-  "queue.concurrency": 1,
-  "queue.auto_retry_limit": 2,
-  "deploy.dry_run": false,
-  "deploy.timeout_ms": 300_000,
-}
-
-const MERGE_LAYOUTS = new Set<MergeLayout>([
-  "bubble_br",
-  "bubble_bl",
-  "bubble_tr",
-  "bubble_tl",
-  "rect_br",
-  "fullscreen_intro",
-])
+export type { MergeLayout, SettingKey, SettingValues }
+export { SETTING_DEFAULTS, SETTING_KEYS }
 
 export type SettingOverrides<K extends SettingKey = SettingKey> = {
   campaign?: SettingValues[K] | null
   lead?: SettingValues[K] | null
 }
 
-// Range/integer validation is deferred to the Settings write path — corrupt jsonb falls back silently.
-function parseSettingValue<K extends SettingKey>(
+// Range validation lives in lib/settings-schema.ts and runs on the write path only —
+// corrupt jsonb falls back silently on read.
+export function parseStoredSetting<K extends SettingKey>(
   key: K,
   raw: unknown,
 ): SettingValues[K] | undefined {
@@ -126,7 +45,7 @@ function parseSettingValue<K extends SettingKey>(
       return Number.isFinite(value) ? (value as SettingValues[K]) : undefined
     }
     case "merge.layout": {
-      if (typeof raw === "string" && MERGE_LAYOUTS.has(raw as MergeLayout)) {
+      if (typeof raw === "string" && MERGE_LAYOUT_SET.has(raw as MergeLayout)) {
         return raw as SettingValues[K]
       }
       return undefined
@@ -162,7 +81,7 @@ const loadGlobalSettingsCached = cache(async (): Promise<Partial<SettingValues>>
   for (const row of data ?? []) {
     if (!SETTING_KEYS.includes(row.key as SettingKey)) continue
     const key = row.key as SettingKey
-    const parsed = parseSettingValue(key, row.value)
+    const parsed = parseStoredSetting(key, row.value)
     if (parsed !== undefined) {
       Object.assign(resolved, { [key]: parsed })
     }
@@ -223,4 +142,10 @@ export async function resolveMany<K extends SettingKey>(
     result[key] = resolveValue(key, global, overrides?.[key])
   }
   return result
+}
+
+/** Test-only: clears the module-level TTL cache. */
+export function resetSettingsTtlCache(): void {
+  ttlSettings = null
+  ttlLoadedAt = 0
 }
