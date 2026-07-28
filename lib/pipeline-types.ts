@@ -99,20 +99,6 @@ export function nextPipelineStep(step: PipelineStep): PipelineStep | null {
   return PIPELINE_STEPS[index + 1]!
 }
 
-export function readRetryBaseMs(): number {
-  const raw = process.env.PIPELINE_RETRY_BASE_MS
-  if (raw === undefined || raw === "") return 30_000
-  const parsed = Number(raw)
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : 30_000
-}
-
-export function readStubStepMs(): number {
-  const raw = process.env.PIPELINE_STUB_STEP_MS
-  if (raw === undefined || raw === "") return 500
-  const parsed = Number(raw)
-  return Number.isFinite(parsed) && parsed >= 0 ? parsed : 500
-}
-
 export function abortableDelay(ms: number, signal: AbortSignal): Promise<void> {
   if (ms <= 0) return Promise.resolve()
   if (signal.aborted) return Promise.reject(new ShutdownError())

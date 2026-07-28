@@ -771,6 +771,8 @@ The distinction is the whole point: purging is our own scheduled behavior and sh
 
 Defaults to `status='ready'` — the handoff to outreach is reviewed leads only. Other statuses are exportable for inspection but that is not the primary path.
 
+> **Phase 15 export hazard (AC-2).** A `Ready` lead whose page was deliberately unpublished (`landing_pages.deploy_status='removed'`) still carries `campaign_leads.netlify_url` — unpublish does not clear it (DB.md §5.4). Phase 15's export query must exclude or flag those rows; exporting the stored URL verbatim will fail AC-2's "every landing_url loads a working page" check silently.
+
 ---
 
 ## 13. Logging and observability
@@ -889,13 +891,16 @@ npm run worker
   "worker": "tsx --conditions react-server --env-file-if-exists=.env.local worker/index.ts",
   "seed": "tsx --env-file-if-exists=.env.local scripts/seed.ts",
   "typecheck": "tsc --noEmit",
-  "test": "node --import tsx --test \"lib/**/*.test.ts\"",
+  "test": "node --import tsx --conditions react-server --test \"lib/**/*.test.ts\" \"worker/**/*.test.ts\"",
   "verify:imports": "tsx scripts/verify-imports.ts",
   "verify:auth": "tsx --env-file-if-exists=.env.local scripts/verify-auth.ts",
   "verify:worker": "tsx --conditions react-server --env-file-if-exists=.env.local scripts/verify-worker.ts",
+  "verify:leads-ui": "tsx --conditions react-server --env-file-if-exists=.env.local scripts/verify-leads-ui.ts",
   "lint": "eslint"
 }
 ```
+
+An excerpt — `package.json` is the list. One `verify:<phase>` script per phase, each self-cleaning against the real database.
 
 **Two levels of verification, deliberately separate.** `npm test` is `node --test` over the pure logic — the login throttle's tiers, `env.ts`'s absent-vs-invalid reporting, the redirect sanitizer of §4.5, and session sign/verify. It needs no server, no database and no `.env.local`, so it runs on a fresh clone. `npm run verify:auth` asserts the wire contract of §4 against a **running** dev server and cannot be run without one.
 
@@ -903,7 +908,17 @@ npm run worker
 
 **`--env-file-if-exists` is load-bearing.** Next.js loads `.env.local` automatically; `tsx` does not. Without the flag the worker starts with an empty environment and fails its own startup check, which looks like a configuration bug and is not one. The `-if-exists` variant (Node 22+) means a missing file is a warning rather than a crash, so CI and a fresh clone still run.
 
-**`--conditions react-server` is required for `worker` and `verify:worker`.** `server-only` resolves to a throwing stub unless the `react-server` export condition is set. Both scripts import `lib/` modules that carry that marker (`lib/supabase.ts`, `lib/queue.ts`, …). Plain `npx tsx worker/index.ts` fails with *"This module cannot be imported from a Client Component module"*.
+**`--conditions react-server` is required by every script that reaches a `server-only` module** — `worker`, `test`, and the `verify:` scripts from `worker` onward (`record`, `merge`, `landing`, `deploy`, `dashboard`, `leads`, `leads-ui`). `server-only` resolves to a throwing stub unless the `react-server` export condition is set, and these import `lib/` modules that carry the marker (`lib/supabase.ts`, `lib/queue.ts`, `lib/dashboard-stream.ts`, `lib/leads-stream.ts`, …). Plain `npx tsx worker/index.ts` fails with *"This module cannot be imported from a Client Component module"*. **Add the flag when adding a script**, rather than diagnosing that message later.
+
+**Three verification levels, not two.** `npm test` is pure logic on a fresh clone. The `verify:` scripts assert wire contracts and database behaviour against a running server. `npm run verify:leads-ui` is the third: it drives the **rendered interface** in Chromium.
+
+That third level exists because it is the only one that catches a whole class of defect. Phase 13 shipped with `verify:leads` at 23/23 while two client-side bugs were live in the table, and the first `verify:leads-ui` run found two more (`PRD.md` Phase 13 findings 17–19). Anything asserted only through a route handler or an RPC is not evidence that the screen works.
+
+`verify:leads-ui` needs both the dev server **and** Chromium (`npm run setup:browser`); without a server every leg reports **skipped**, never passed. Failure screenshots are written to `.verify-ui/` (gitignored) — a red leg with no picture costs a whole re-run.
+
+**Streams are verified in-process, deliberately.** The channel-lifecycle legs in `verify:dashboard` and `verify:leads` call `subscribeDashboardStream` / `subscribeLeadsStream` directly rather than over HTTP, because those modules are module-scope singletons and the failure being tested is invisible from outside: the host swallows the `RangeError` while `state.channel` still ends up null, so the next connection rebuilds and every observable check stays green. That is precisely how the defect of `PRD.md` Phase 13 finding 14 survived an 18/18 run.
+
+Two traps worth knowing before touching those legs. `realtime.disconnect()` does **not** reach the `.subscribe()` callback — supabase-js reconnects the socket underneath — so the CLOSED path is `removeChannel()`, i.e. the **last subscriber leaving**. And **join must be read off the channel** (`state.channel.state === "joined"`), never inferred from the first delivered payload: that payload *is* the SUBSCRIBED catch-up tick, so inferring join from it makes every leg report "never joined" the moment that tick regresses, burying the real defect.
 
 Optional worker tuning (bare `process.env` reads, not in `lib/env.ts`):
 
@@ -932,7 +947,7 @@ npm run setup:browser
 # equivalent: npx playwright install chromium
 ```
 
-Run `npm run verify:record` after installing Chromium to exercise the hermetic fixture leg. The network-dependent real-site leg is gated behind `RECORD_REAL=1`.
+Run `npm run verify:record` after installing Chromium to exercise the hermetic fixture leg. The network-dependent real-site leg is gated behind `RECORD_REAL=1`. The same Chromium install is what `npm run verify:page` and `npm run verify:leads-ui` drive.
 
 `npm run verify:page` is hermetic — no env file, no database. It generates a landing page from fixtures, serves it over two local HTTP origins (page + Supabase stand-in), and drives Chromium at 375px and 1920px with request interception. Run after `npm run setup:browser`.
 
@@ -972,6 +987,9 @@ Run `npm run verify:record` after installing Chromium to exercise the hermetic f
 7. **`retained_pages` manual removal** — no in-app UI. To stop serving a kept-after-delete page: delete the `retained_pages` row **and** trigger a `site-sync` (or wait for the next deploy of any kind — the manifest is desired state). Deleting the row alone unpublishes nothing until a sync runs.
 8. **Mass-removal floor is a refusal, not a repair** (§10.3) — a manifest dropping >50 % of a 20+ page site fails the sync and keeps failing until the underlying data is fixed. That is deliberate (staying published beats mass-404), but there is no in-app surface saying *why*; the reason is only in the deployer log. Revisit when Phase 14 ships the Logs screen.
 9. **End-to-end dry-run coverage** — `verify:deploy` proves manifest assembly makes zero HTTP calls, but the full assertion (a lead reaching `deployed_dry_run=true` with a null `netlify_url`) needs Supabase and currently rides on the production run. A `verify:worker`-style leg would close it.
+10. **A silently-dropped stream takes `SILENCE_MS` to be noticed** — measured at **25.3–25.4 s** across `verify:leads-ui` runs. With the socket dropped underneath it the `EventSource` never fires `error`, so the silence timer is the only degrade path left, and the indicator reads `Live` over frozen rows for that whole window. Behaviour matches the design and Phase 12's criterion is met. Shortening it trades directly against `HEARTBEAT_MS` cost on every open stream, so it is recorded rather than changed — revisit with the Phase 14 worker-down indicator, which needs a staleness signal anyway.
+11. **`lib/leads-stream.ts` has no periodic safety net** — the dashboard stream re-snapshots every `RESNAPSHOT_MS` regardless of Realtime health; the leads stream has no equivalent, so a resync on channel join is the *only* thing that repairs rows missed while the socket was down (`verify:leads` asserts both the join resync and the resync after a socket kill). It also gives up permanently after `MAX_CHANNEL_BACKOFF_ATTEMPTS`, telling clients to poll and never retrying for the life of the process. Both are deliberate — clients do keep polling — but they mean the leads table's liveness rests entirely on the client, which is a thinner guarantee than the dashboard's and is **not** currently surfaced anywhere in the UI.
+12. **In-drawer video playback is unverified by anything automated** — `verify:leads` proves the byte-range media routes (200, `206` with `Content-Range`, `401`, `404`, path containment) and `verify:leads-ui` proves the drawer renders, but nothing presses play. The remaining risk is codec/container behaviour in the actual `<video>` element, which neither level touches.
 
 ---
 

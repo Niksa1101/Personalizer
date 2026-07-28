@@ -1,5 +1,5 @@
 import { ERROR_CODES, type ErrorCode } from "@/lib/pipeline-types"
-import { readRetryBaseMs } from "@/lib/pipeline-types"
+import { readRetryBaseMs } from "@/lib/pipeline-env"
 
 /**
  * Mirrors `error_code_bucket()` bad_website list in

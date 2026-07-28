@@ -6,9 +6,14 @@
 import { createClient } from "@supabase/supabase-js"
 
 import type { Database } from "../lib/database.types"
-import { dashboardCountsSchema } from "../lib/dashboard-types"
+import { subscribeDashboardStream } from "../lib/dashboard-stream"
+import {
+  dashboardCountsSchema,
+  type DashboardScope,
+} from "../lib/dashboard-types"
 import { assertEnvOrExit } from "../lib/env-node"
 import { closeQueueConnections } from "../lib/queue"
+import { getSupabaseAdmin } from "../lib/supabase"
 import { SESSION_COOKIE_NAME } from "../lib/session"
 
 interface CheckResult {
@@ -163,6 +168,196 @@ async function loginSessionCookie(
     }
   }
   return { cookie }
+}
+
+const CHANNEL_JOIN_MS = 8_000
+const CHANNEL_PUSH_MS = 10_000
+/** `RESNAPSHOT_MS` in lib/dashboard-stream.ts. A push inside this window came
+ *  from Realtime, not from the safety-net timer — which is what makes the
+ *  recovery legs below assert recovery rather than "something eventually fired". */
+const RESNAPSHOT_MS = 15_000
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
+
+/**
+ * The stream singleton's own handle (`lib/dashboard-stream.ts` keys it off the
+ * global symbol registry). Join is read from the channel rather than from the
+ * first pushed snapshot on purpose: the first push *is* the SUBSCRIBED
+ * catch-up tick, so inferring join from it would make every leg below report
+ * "never joined" the moment that tick regressed — burying the actual defect.
+ */
+function channelJoined(): boolean {
+  const state = (
+    globalThis as unknown as Record<symbol, { channel?: { state?: string } | null }>
+  )[Symbol.for("personalizer.dashboardStream")]
+  return state?.channel?.state === "joined"
+}
+
+async function waitFor(
+  predicate: () => boolean,
+  timeoutMs: number,
+): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    if (predicate()) return true
+    await sleep(100)
+  }
+  return predicate()
+}
+
+/**
+ * Drain the SUBSCRIBED catch-up tick before a leg samples its push counter.
+ * Join is observable a beat before that tick lands, so a counter captured
+ * straight after `channelJoined()` would see the join's own snapshot and read
+ * it as the write's. Deliberately does not require the tick — its absence is
+ * what leg 1 is there to detect.
+ */
+async function settleAfterJoin(pushes: () => number): Promise<void> {
+  await waitFor(() => pushes() > 0, 2_000)
+  await sleep(800)
+}
+
+/**
+ * Phase 12's second exit criterion — "killing the socket falls back to polling
+ * and recovers" — was previously asserted only against a **healthy** channel.
+ * Every SSE leg above opens a stream, reads it, and aborts the *client* side;
+ * nothing ever pushed the server's Realtime channel into an error or a
+ * teardown. That is why the `removeChannel()` stack overflow (Phase 13 findings
+ * 13/14) sat latent through an 18/18 run.
+ *
+ * These legs drive `lib/dashboard-stream.ts` in-process, because the module is a
+ * module-scope singleton and the honest place to kill its socket is a process
+ * that owns it. Over HTTP the same defect is invisible: the host swallows the
+ * RangeError and `state.channel` still lands on null, so the next connection
+ * rebuilds the channel and every observable check stays green.
+ */
+async function checkChannelLifecycle(
+  supabase: ReturnType<typeof createClient<Database>>,
+  scope: DashboardScope,
+  pokeLeadId: string,
+): Promise<void> {
+  // The recursion surfaces as a burst of unhandled RangeErrors rather than a
+  // throw at the call site — `removeChannel()` re-enters through the promise
+  // that supabase-js returns, so nothing is on the stack to catch it.
+  const rangeErrors: string[] = []
+  const onRejection = (reason: unknown) => {
+    if (reason instanceof RangeError) rangeErrors.push(reason.message)
+  }
+  process.on("unhandledRejection", onRejection)
+
+  const poke = () =>
+    supabase
+      .from("campaign_leads")
+      .update({ updated_at: new Date().toISOString() })
+      .eq("id", pokeLeadId)
+
+  try {
+    // ---- leg 1: a killed websocket still delivers -------------------------
+    const first = new AbortController()
+    let pushes = 0
+    const unsubscribeFirst = subscribeDashboardStream(scope, {
+      enqueue: () => {
+        pushes += 1
+      },
+      onOverflow: () => undefined,
+      signal: first.signal,
+    })
+
+    const joined = await waitFor(channelJoined, CHANNEL_JOIN_MS)
+    if (!joined) {
+      fail("realtime socket kill recovers", "channel never joined")
+      fail("channel teardown does not recurse", "channel never joined")
+      fail("channel rebuilt after teardown", "channel never joined")
+      unsubscribeFirst()
+      first.abort()
+      return
+    }
+
+    await settleAfterJoin(() => pushes)
+    getSupabaseAdmin().realtime.disconnect()
+
+    const beforeKill = pushes
+    const killWriteAt = Date.now()
+    await poke()
+    const recovered = await waitFor(() => pushes > beforeKill, CHANNEL_PUSH_MS)
+    const recoveryMs = Date.now() - killWriteAt
+
+    if (!recovered) {
+      fail(
+        "realtime socket kill recovers",
+        `no snapshot within ${CHANNEL_PUSH_MS}ms of a write after socket kill`,
+      )
+    } else if (recoveryMs >= RESNAPSHOT_MS) {
+      // Delivered, but late enough that the safety net — not the rebuilt
+      // channel — is the plausible source. That is a degraded dashboard, not a
+      // recovered one.
+      fail("realtime socket kill recovers", `${recoveryMs}ms — safety-net window`)
+    } else {
+      pass("realtime socket kill recovers", `${recoveryMs}ms`)
+    }
+
+    // ---- leg 2: teardown to zero subscribers does not recurse -------------
+    rangeErrors.length = 0
+    unsubscribeFirst()
+    first.abort()
+    // The re-entrant CLOSED dispatch lands a few microtask turns later.
+    await sleep(1_000)
+
+    if (rangeErrors.length > 0) {
+      fail(
+        "channel teardown does not recurse",
+        `${rangeErrors.length} unhandled RangeError(s) — ${rangeErrors[0]}`,
+      )
+    } else {
+      pass("channel teardown does not recurse")
+    }
+
+    // ---- leg 3: the next subscriber gets a live channel, not a dead one ----
+    const second = new AbortController()
+    let repushes = 0
+    const unsubscribeSecond = subscribeDashboardStream(scope, {
+      enqueue: () => {
+        repushes += 1
+      },
+      onOverflow: () => undefined,
+      signal: second.signal,
+    })
+
+    const rejoined = await waitFor(channelJoined, CHANNEL_JOIN_MS)
+    if (!rejoined) {
+      fail("channel rebuilt after teardown", "channel never rejoined")
+    } else {
+      await settleAfterJoin(() => repushes)
+      const beforeRebuild = repushes
+      const rebuildWriteAt = Date.now()
+      await poke()
+      const pushedAgain = await waitFor(
+        () => repushes > beforeRebuild,
+        CHANNEL_PUSH_MS,
+      )
+      const rebuildMs = Date.now() - rebuildWriteAt
+
+      if (!pushedAgain) {
+        // Exactly the pre-fix state: `state.channel` never cleared, so
+        // `ensureChannel()` short-circuits forever and no write is ever pushed
+        // again for the life of the process.
+        fail(
+          "channel rebuilt after teardown",
+          `no Realtime push within ${CHANNEL_PUSH_MS}ms`,
+        )
+      } else if (rebuildMs >= RESNAPSHOT_MS) {
+        fail("channel rebuilt after teardown", `${rebuildMs}ms — safety-net window`)
+      } else {
+        pass("channel rebuilt after teardown", `${rebuildMs}ms`)
+      }
+    }
+
+    unsubscribeSecond()
+    second.abort()
+    await sleep(500)
+  } finally {
+    process.off("unhandledRejection", onRejection)
+  }
 }
 
 async function main(): Promise<void> {
@@ -932,6 +1127,22 @@ async function main(): Promise<void> {
       skip("sse latency", "dev server not running")
       skip("polling fallback endpoint", "dev server not running")
       skip("stream reconnect", "dev server not running")
+    }
+
+    // Runs last and in-process: it kills the shared Realtime socket and bumps
+    // `updated_at` on a fixture row, so every count assertion above must
+    // already have been made. No dev server needed — the subject is this
+    // process's own stream singleton.
+    if (campaignLeadIds.length > 0) {
+      await checkChannelLifecycle(
+        supabase,
+        { campaignId, includeArchived: false },
+        campaignLeadIds[0],
+      )
+    } else {
+      skip("realtime socket kill recovers", "no fixture lead to poke")
+      skip("channel teardown does not recurse", "no fixture lead to poke")
+      skip("channel rebuilt after teardown", "no fixture lead to poke")
     }
   } finally {
     if (campaignId) {

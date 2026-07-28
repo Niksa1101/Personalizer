@@ -186,9 +186,21 @@ function removeChannel(state: DashboardStreamState): void {
     clearTimeout(state.channelReconnectTimer)
     state.channelReconnectTimer = null
   }
-  if (state.channel) {
-    void getSupabaseAdmin().removeChannel(state.channel)
+  // Detach BEFORE removing — `supabase.removeChannel()` dispatches CLOSED to
+  // the subscribe callback, and that handler re-enters here. Clearing
+  // afterwards lets the re-entrant call see a live channel and recurse until
+  // the stack blows. Found in Phase 13; identical shape, same fix.
+  //
+  // Note what the trigger actually is: not a network fault. `realtime
+  // .disconnect()` never reaches this callback (supabase-js reconnects the
+  // socket beneath it) — the CLOSED path is this function, i.e. the **last
+  // subscriber leaving**. So ordinary teardown was enough to blow the stack,
+  // which is why it survived an 18/18 run whose only "socket" test aborted the
+  // client. `verify:dashboard` now forces it.
+  const channel = state.channel
+  if (channel) {
     state.channel = null
+    void getSupabaseAdmin().removeChannel(channel)
   }
 }
 

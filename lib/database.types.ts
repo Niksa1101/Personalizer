@@ -884,7 +884,15 @@ export type Database = {
       }
       seed_demo_data: { Args: never; Returns: Json }
       snapshot_live_pages: {
-        Args: { p_campaign_lead_ids: string[] }
+        Args: { p_campaign_lead_ids: string[]; p_reason?: string }
+        Returns: undefined
+      }
+      unpublish_landing_page: {
+        Args: { p_campaign_lead_id: string }
+        Returns: undefined
+      }
+      delete_lead_retaining_pages: {
+        Args: { p_campaign_lead_id: string; p_retain: boolean }
         Returns: undefined
       }
       update_campaign_general: {
