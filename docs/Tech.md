@@ -869,7 +869,7 @@ git clone <repo> && cd personalizer
 npm install
 npx playwright install chromium        # browser binary, separate from npm install
 cp .env.example .env.local             # fill all eight
-docker run -d --name pz-redis --restart unless-stopped -p 6379:6379 redis:7-alpine
+npm run redis:up                       # starts pz-redis, creating it on first run
 npx supabase db push                   # apply migrations (DB.md §9)
 npm run seed                           # demo campaign (DB.md §10)
 ```
@@ -896,6 +896,8 @@ npm run worker
   "verify:auth": "tsx --env-file-if-exists=.env.local scripts/verify-auth.ts",
   "verify:worker": "tsx --conditions react-server --env-file-if-exists=.env.local scripts/verify-worker.ts",
   "verify:leads-ui": "tsx --conditions react-server --env-file-if-exists=.env.local scripts/verify-leads-ui.ts",
+  "verify:logs-ui": "tsx --conditions react-server --env-file-if-exists=.env.local scripts/verify-logs-ui.ts",
+  "redis:up": "docker start pz-redis || docker run -d --name pz-redis --restart unless-stopped -p 6379:6379 redis:7-alpine",
   "lint": "eslint"
 }
 ```
@@ -910,11 +912,22 @@ An excerpt — `package.json` is the list. One `verify:<phase>` script per phase
 
 **`--conditions react-server` is required by every script that reaches a `server-only` module** — `worker`, `test`, and the `verify:` scripts from `worker` onward (`record`, `merge`, `landing`, `deploy`, `dashboard`, `leads`, `leads-ui`). `server-only` resolves to a throwing stub unless the `react-server` export condition is set, and these import `lib/` modules that carry the marker (`lib/supabase.ts`, `lib/queue.ts`, `lib/dashboard-stream.ts`, `lib/leads-stream.ts`, …). Plain `npx tsx worker/index.ts` fails with *"This module cannot be imported from a Client Component module"*. **Add the flag when adding a script**, rather than diagnosing that message later.
 
-**Three verification levels, not two.** `npm test` is pure logic on a fresh clone. The `verify:` scripts assert wire contracts and database behaviour against a running server. `npm run verify:leads-ui` is the third: it drives the **rendered interface** in Chromium.
+**Three verification levels, not two.** `npm test` is pure logic on a fresh clone. The `verify:` scripts assert wire contracts and database behaviour against a running server. `npm run verify:leads-ui`, `verify:queue-ui` and `verify:logs-ui` are the third: they drive the **rendered interface** in Chromium.
 
 That third level exists because it is the only one that catches a whole class of defect. Phase 13 shipped with `verify:leads` at 23/23 while two client-side bugs were live in the table, and the first `verify:leads-ui` run found two more (`PRD.md` Phase 13 findings 17–19). Anything asserted only through a route handler or an RPC is not evidence that the screen works.
 
-`verify:leads-ui` needs both the dev server **and** Chromium (`npm run setup:browser`); without a server every leg reports **skipped**, never passed. Failure screenshots are written to `.verify-ui/` (gitignored) — a red leg with no picture costs a whole re-run.
+The UI scripts need both the dev server **and** Chromium (`npm run setup:browser`); without a server every leg reports **skipped**, never passed. Failure screenshots are written to `.verify-ui/` (gitignored) — a red leg with no picture costs a whole re-run.
+
+**Assert against the settled state, never the first paint.** A screen whose data arrives from a poll or a stream renders a null-data branch first, and a leg that reads the DOM immediately after `goto` is testing the loading state. Two Phase 14 queue legs did exactly that: one skipped itself every run, the other passed vacuously or skipped depending on timing (`PRD.md` Phase 14 second-pass findings). `waitFor`/`waitForFunction` on the settled text, then assert.
+
+**A leg that cannot fail is worse than no leg.** Every leg added from Phase 13 onward is kept only after being shown to fail against the reintroduced defect. Phase 14's second pass found four that had never run or could not discriminate — a fake clock blind to over-polling, a `clear-queue` fixture with two mutually exclusive assertions, and the two timing-decided legs above. Mutation-test the leg, not just the fix.
+
+**Kill child processes by tree, not by pid.** `spawn("npm", …, { shell: true })` returns the **shell's** pid; signalling it on Windows kills the shell and orphans the node process underneath. A leaked worker keeps draining the queue and corrupts every leg that runs after it — one such leak caused 6 of 15 failures in the first real `verify:queue` run. Use `killProcessTree` from `scripts/fixtures/ui-harness.ts`.
+
+**Two Windows teardown traps**, both of which print a clean summary and *then* exit `-1073740791` (a libuv `UV_HANDLE_CLOSING` assertion) — a CI job sees a failure with no useful output:
+
+- ioredis `quit()` is a *command*; on a client that never connected it leaves the retry handle open. `closeHealthRedis` calls `disconnect()` when `status !== "ready"`.
+- `process.exit()` on top of a live undici keep-alive socket from a **successful** `fetch` crashes. Return and let the loop drain (~4 s) instead. A *failed* fetch leaves no socket, which is why only some skip paths crashed.
 
 **Run the leads scripts with Redis up at least once.** "Self-cleaning" meant Postgres only until 2026-07-28: the retry and re-queue legs enqueue real BullMQ jobs keyed by campaign_lead id, and deleting the fixture rows does not remove them, so each run left poisoned entries in `bull:pipeline:wait` for the next worker to fail on. With Redis down the enqueue fails and nothing leaks, which is why it survived the whole of Phase 13 (`PRD.md` finding 20). `scripts/queue-sweep.ts` now removes a run's orphans and is shared by both scripts rather than copied. It only ever deletes jobs that appeared **during that run** *and* whose `campaign_lead` row is gone — the second condition is why the sweep must be called **after** the row teardown, not before.
 
@@ -957,11 +970,15 @@ Run `npm run verify:record` after installing Chromium to exercise the hermetic f
 
 **`--restart unless-stopped` on the Redis container is deliberate.** Without it, a reboot leaves Docker Desktop running but the container stopped, and the worker fails to connect with an error that points at Redis rather than at the missing container — a confusing five minutes every time the machine restarts. `unless-stopped` rather than `always` so that an explicit `docker stop pz-redis` still means stopped.
 
+`npm run redis:up` is `docker start pz-redis || docker run …`, so it is safe to run whether the container exists or not. **Use it rather than an ad-hoc `docker run`** — a second container under another name binds 6379 first and then `pz-redis` will not start, which reads as a Redis outage. The queue scripts name this command when they skip.
+
 `npm run verify:imports` checks both binaries exist on disk, not merely that the modules import. Run it after any fresh `npm install`.
 
 ### 16.3 Two Windows notes
 
 - **One dev server per project.** *"a lockfile mechanism prevents multiple `next dev` or `next build` instances on the same project"* (`version-16.md:922`). A second `npm run dev` fails rather than silently taking another port. Dev output now lives in `.next/dev` (`version-16.md:920`), so `next dev` and `next build` no longer clobber each other.
+
+  The lock is taken on `path.join(distDir, "lock")` (`server/lib/router-utils/setup-dev-bundler.js`), so **a different `distDir` is a different lock**. `next.config.ts` reads `distDir` from `NEXT_DIST_DIR`, and `verify:settings` sets it to `.next-sentinel` for the throwaway server it boots with sentinel env values — otherwise that leg cannot run at all while you have a dev server up, and it fails with a downstream `fetch failed` rather than a boot error, because the port briefly binds either way. Anything adding a `distDir` must be ignored in **both** `.gitignore` and `eslint.config.mjs`; linting the sentinel's build output took `npm run lint` from 1 warning to 7891 problems. Next also appends the new dir's type globs to `tsconfig.json` on first boot — a one-time write, committed so later runs are no-ops.
 - **Paths.** `LOCAL_STORAGE_ROOT` is an absolute Windows path (`C:\personalizer-media`). All paths *stored in the database* are POSIX-relative to it (`DB.md` §3). Use `path.join` at every boundary; never concatenate. Long-path support matters — `{batch}/{lead-slug}/` with a long company name plus a collision hash approaches `MAX_PATH` on unprepared systems.
 
 ---

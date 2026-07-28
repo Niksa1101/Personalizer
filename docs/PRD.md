@@ -927,15 +927,27 @@ The three remaining screens: §6.4, §6.7, §6.8. Including the worker-down indi
 
 | Exit criterion | Verified by |
 |---|---|
-| Stopping the worker surfaces a clear indicator within 10 seconds | `verify:queue-ui` Q-3 (`worker down surfaces within 10s`); `verify:queue` beat TTL + kill legs |
+| Stopping the worker surfaces a clear indicator within 10 seconds | `verify:queue-ui` Q-3 (`worker down surfaces within 10s`, **4.4–4.6 s** measured); `verify:queue` beat TTL + kill legs (**3.4 s**) |
 | Every setting is editable and takes effect without a restart | `verify:settings` TTL + concurrency echo in `verify:queue`; dry-run round-trip legs |
 | No env *value* appears anywhere in the DOM | `verify:settings` `env leak sentinel boot` on `/settings` HTML + RSC flight |
 
 **Review fixes (2026-07-28):** 28 findings across Settings, Queue, and Logs — blocking fixes include `deploy.dry_run` boolean parsing, shared throttled health polling (`lib/queue-health-poller.ts` + `lib/queue-health-store.ts`), and Queue lead links using `campaign_lead` UUIDs. Site-sync `lastResult` now reads a Redis key (`pz:sitesync:last`) written by the worker; resets to `unknown` on Redis flush.
 
+#### Review findings (Phase 14, second pass)
+
+The first pass shipped green while three of its own gates were reporting nothing. Every fix below was mutation-tested — the guard was shown to fail against the reintroduced defect before being kept.
+
+1. **The throttle test was decorative.** `queue-health-poller.test.ts`'s fake clock snapshotted due timers *before* running them, so a timer scheduled during a tick waited for the next `tick()` call. The request count then equalled the number of `tick()` calls whatever the delay: reintroducing the success-path reschedule-at-0ms bug passed 5/5. The clock now drains newly-due timers in a bounded loop; the same mutation fails 4 legs by name.
+2. **Open-ended log windows clamped to the app clock.** `resolveLogTimeWindow` set `to = now` even when open-ended and `listLogs` applied it as `.lte(created_at)`, so rows written in the last few hundred milliseconds were invisible on `/logs` — a gap that widens with skew against a remote Postgres, and one that left the "N new since load" pill inconsistent, since `countNewLogs` applies no upper bound. An absent or unparseable `to` now means no upper bound at all.
+3. **The finding-6 fix left the mirror-image mismatch.** `?level=bogus` set all four levels (so every checkbox rendered checked) *and* `levelsAllInvalid`, so the table returned nothing and the screen read "No logs in the last 24 hours" with a *Widen to last 7 days* button — the wrong reason. Same for a stale `?cursor=`. `describeInvalidLogParams` now names the reason and offers the reset; the boxes no longer claim rejected levels.
+4. **The worker child was never killed.** `spawn("npm", …, { shell: true })` returns the *shell's* pid, so `process.kill` signalled the shell and orphaned the worker. The leak kept draining the queue — one cause behind **6 of the first run's failures**, including both TTL legs. `killProcessTree` (shared, `scripts/fixtures/ui-harness.ts`) takes the tree. The same bug leaked `verify:settings`' sentinel dev server onto port 3111, after which its env-leak leg skipped **every subsequent run** as "port occupied".
+5. **The clear-queue leg could not test its own name.** It asserted three waiting jobs *and* that only two were removed — mutually exclusive. Re-adding a duplicate `jobId` does not make a job active; BullMQ ignores it, so there was never an active job to protect. An in-process worker blocked at concurrency 1 now creates one. Mutation-testing then showed `clearQueue` is protected by BullMQ's **lock**, not by its state filter — widening the filter still leaves the job — so the leg asserts `removeFailedCount === 0`, which is the only signal that separates the two.
+6. **Two queue UI legs were decided by timing.** `health` is null on first paint, so the banner is empty and the concurrency card renders its other branch; `banner absent when healthy` passed vacuously on one run and skipped on the next, and `concurrency shows no worker running` skipped every run. Both assert against the settled state, and the banner check moved to where a worker is actually running.
+7. **Both queue scripts crashed instead of skipping** without Redis, breaking the convention Phase 13 set with `verify:leads-ui` — a missing dependency reports **skipped** and exits 0, it does not fail the run. Both preflight Redis now. Two Windows teardown traps surfaced while proving it, each printing a clean summary and *then* exiting `-1073740791`: ioredis `quit()` on a client that never connected, and `process.exit()` on top of a live keep-alive socket.
+
 **Deferrals:** `verify-leads-ui` harness migration (Phase 15 cleanup, same class as dashboard/leads stream dedup).
 
-Verified by `npm run typecheck`, `npm run lint`, `npm test` (**262 tests** — 256 Phase 13 + 6 new), `npm run verify:server-only`, `npm run verify:settings`, `npm run verify:queue`, `npm run verify:queue-ui`, `npm run verify:logs`, plus regression `verify:leads` 27, `verify:leads-ui` 9, `verify:dashboard` 21, `verify:schema` 6.
+Verified by `npm run typecheck`, `npm run lint`, `npm test` (**307 tests** — 256 Phase 13 + 51 new), `npm run verify:server-only` 5/5, `npm run verify:settings` **45/45**, `npm run verify:queue` **15/15**, `npm run verify:queue-ui` **8/8**, `npm run verify:logs` **12/12**, `npm run verify:logs-ui` **8/8** — no skipped legs in any of them, with Redis and a dev server up.
 
 ---
 
