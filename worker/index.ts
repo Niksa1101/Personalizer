@@ -20,11 +20,14 @@ import {
   isDeployDirty,
   PIPELINE_QUEUE_NAME,
   registerLiveness,
+  setSiteSyncLastResult,
   SITE_SYNC_QUEUE_NAME,
-  startLivenessRefresh,
+  startWorkerHeartbeats,
+  type WorkerBeatPayload,
 } from "../lib/queue"
 import type { StepOutcome } from "../lib/pipeline-types"
 import { resolveMany } from "../lib/settings"
+import { SETTING_DEFAULTS } from "../lib/settings-schema"
 import { storageAbs } from "../lib/storage"
 
 import { runSiteSync } from "./deploy/sync"
@@ -44,13 +47,24 @@ async function main(): Promise<void> {
   console.log(`[worker] starting (${workerId})`)
 
   await registerLiveness(workerId)
-  const stopLivenessRefresh = startLivenessRefresh(workerId)
+
+  // Alive key TTL is 15 s; boot recovery + temp sweep can exceed it. Starting
+  // heartbeats first keeps scanLiveWorkers() seeing this worker so reconcile()
+  // won't orphan in-flight leads. The beat self-corrects within one 2 s tick.
+  const workerStartedAt = new Date().toISOString()
+  let currentConcurrency = SETTING_DEFAULTS["queue.concurrency"]
+  const beatPayload = (): WorkerBeatPayload => ({
+    concurrency: currentConcurrency,
+    startedAt: workerStartedAt,
+    pid: process.pid,
+  })
+  const stopHeartbeats = startWorkerHeartbeats(workerId, beatPayload)
 
   await runBootRecovery()
   await sweepStaleRecorderTemps(storageAbs("tmp"))
 
   const settings = await resolveMany(["queue.concurrency"])
-  const concurrency = settings["queue.concurrency"]
+  currentConcurrency = settings["queue.concurrency"]
 
   const shutdownController = new AbortController()
   let shuttingDown = false
@@ -64,7 +78,7 @@ async function main(): Promise<void> {
       }),
     {
       connection: getRedis(),
-      concurrency,
+      concurrency: currentConcurrency,
     },
   )
 
@@ -102,6 +116,7 @@ async function main(): Promise<void> {
   siteSyncWorker.on("completed", () => {
     void (async () => {
       try {
+        await setSiteSyncLastResult("success")
         if (await isDeployDirty()) {
           const landed = await enqueueSiteSync()
           if (!landed) {
@@ -129,6 +144,7 @@ async function main(): Promise<void> {
 
     void (async () => {
       try {
+        await setSiteSyncLastResult("failed")
         if (await isDeployDirty()) {
           const landed = await enqueueSiteSync({
             delayMs: SITE_SYNC_RETRY_DELAY_MS,
@@ -146,9 +162,19 @@ async function main(): Promise<void> {
     })()
   })
 
-  const stopPeriodicReconcile = startPeriodicReconcile()
+  const stopPeriodicReconcile = startPeriodicReconcile({
+    onAfterTick: async () => {
+      const nextSettings = await resolveMany(["queue.concurrency"])
+      const next = nextSettings["queue.concurrency"]
+      if (next !== currentConcurrency) {
+        bullWorker.concurrency = next
+        currentConcurrency = next
+        console.log(`[worker] concurrency updated to ${next}`)
+      }
+    },
+  })
 
-  console.log(`[worker] consuming (concurrency=${concurrency})`)
+  console.log(`[worker] consuming (concurrency=${currentConcurrency})`)
 
   const shutdown = async (signal: string) => {
     if (shuttingDown) return
@@ -175,7 +201,7 @@ async function main(): Promise<void> {
     }
 
     stopPeriodicReconcile()
-    stopLivenessRefresh()
+    stopHeartbeats()
     await closeSharedBrowser().catch((error) => {
       console.error("[worker] browser close error:", error)
     })

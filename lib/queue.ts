@@ -11,7 +11,22 @@ export const SITE_SYNC_JOB_ID = "site-sync"
 
 const LIVENESS_PREFIX = "pz:worker:alive:"
 const LIVENESS_TTL_SECONDS = 15
-const LIVENESS_REFRESH_MS = 5_000
+/** Beat key drives the health endpoint's worker-down indicator (4 s TTL).
+ *  Alive key drives reconcile() recovery (15 s TTL) — do not shorten it. */
+const BEAT_PREFIX = "pz:worker:beat:"
+const BEAT_TTL_SECONDS = 4
+const BEAT_REFRESH_MS = 2_000
+const SITE_SYNC_LAST_KEY = "pz:sitesync:last"
+
+export type WorkerBeatPayload = {
+  concurrency: number
+  startedAt: string
+  pid: number
+}
+
+export type WorkerBeat = WorkerBeatPayload & {
+  workerId: string
+}
 
 let redis: Redis | null = null
 let queue: Queue | null = null
@@ -238,26 +253,70 @@ function livenessKey(workerId: string): string {
   return `${LIVENESS_PREFIX}${workerId}`
 }
 
+function beatKey(workerId: string): string {
+  return `${BEAT_PREFIX}${workerId}`
+}
+
 export async function registerLiveness(workerId: string): Promise<void> {
   await ensureRedisConnected()
   await getRedis().set(livenessKey(workerId), "1", "EX", LIVENESS_TTL_SECONDS)
 }
 
-export async function refreshLiveness(workerId: string): Promise<void> {
-  await getRedis().set(livenessKey(workerId), "1", "EX", LIVENESS_TTL_SECONDS)
+async function refreshHeartbeats(
+  workerId: string,
+  payload: WorkerBeatPayload,
+): Promise<void> {
+  const client = getRedis()
+  const pipeline = client.pipeline()
+  pipeline.set(livenessKey(workerId), "1", "EX", LIVENESS_TTL_SECONDS)
+  pipeline.set(
+    beatKey(workerId),
+    JSON.stringify(payload),
+    "EX",
+    BEAT_TTL_SECONDS,
+  )
+  await pipeline.exec()
 }
 
 export async function deleteLiveness(workerId: string): Promise<void> {
-  await getRedis().del(livenessKey(workerId))
+  const client = getRedis()
+  await client.del(livenessKey(workerId), beatKey(workerId))
 }
 
-export function startLivenessRefresh(workerId: string): () => void {
-  const timer = setInterval(() => {
-    void refreshLiveness(workerId).catch((error) => {
-      console.error("[worker] liveness refresh failed:", error)
-    })
-  }, LIVENESS_REFRESH_MS)
+export type SiteSyncLastResult = "success" | "failed"
 
+export async function getSiteSyncLastResult(): Promise<
+  SiteSyncLastResult | null
+> {
+  try {
+    await ensureRedisConnected()
+    const raw = await getRedis().get(SITE_SYNC_LAST_KEY)
+    if (raw === "success" || raw === "failed") return raw
+    return null
+  } catch {
+    return null
+  }
+}
+
+export async function setSiteSyncLastResult(
+  result: SiteSyncLastResult,
+): Promise<void> {
+  await ensureRedisConnected()
+  await getRedis().set(SITE_SYNC_LAST_KEY, result)
+}
+
+export function startWorkerHeartbeats(
+  workerId: string,
+  getPayload: () => WorkerBeatPayload,
+): () => void {
+  const tick = () => {
+    void refreshHeartbeats(workerId, getPayload()).catch((error) => {
+      console.error("[worker] heartbeat refresh failed:", error)
+    })
+  }
+
+  tick()
+  const timer = setInterval(tick, BEAT_REFRESH_MS)
   return () => clearInterval(timer)
 }
 
@@ -288,6 +347,43 @@ export async function scanLiveWorkers(): Promise<string[]> {
   } while (cursor !== "0")
 
   return workerIds
+}
+
+export async function scanWorkerBeats(): Promise<WorkerBeat[]> {
+  try {
+    await ensureRedisConnected()
+  } catch {
+    return []
+  }
+
+  const client = getRedis()
+  const pattern = `${BEAT_PREFIX}*`
+  const beats: WorkerBeat[] = []
+  let cursor = "0"
+
+  do {
+    const [nextCursor, keys] = await client.scan(
+      cursor,
+      "MATCH",
+      pattern,
+      "COUNT",
+      100,
+    )
+    cursor = nextCursor
+    for (const key of keys) {
+      const workerId = key.slice(BEAT_PREFIX.length)
+      const raw = await client.get(key)
+      if (!raw) continue
+      try {
+        const payload = JSON.parse(raw) as WorkerBeatPayload
+        beats.push({ workerId, ...payload })
+      } catch {
+        // Malformed beat payload — skip
+      }
+    }
+  } while (cursor !== "0")
+
+  return beats
 }
 
 export async function closeQueueConnections(): Promise<void> {
