@@ -8,6 +8,16 @@ import {
   type TimerHandle,
 } from "@/lib/queue-health-poller"
 
+/**
+ * A tick drains every timer that is due at the new `now`, including timers
+ * scheduled *during* the tick. Without that, a poller that reschedules at 0ms
+ * would still fire once per tick() call and the request-count assertions could
+ * only ever catch polling that is too slow — never polling that is too fast.
+ * The bound turns a self-retriggering timer into a test failure instead of a
+ * hang.
+ */
+const MAX_TIMERS_PER_TICK = 64
+
 type FakeClock = {
   timers: Array<{ id: TimerHandle; at: number; fn: () => void }>
   nextId: number
@@ -32,14 +42,25 @@ function createFakeClock(startMs = 0): FakeClock {
     },
     async tick(ms) {
       clock.now += ms
-      const due = clock.timers
-        .filter((timer) => timer.at <= clock.now)
-        .sort((a, b) => a.at - b.at)
-      clock.timers = clock.timers.filter((timer) => timer.at > clock.now)
-      for (const timer of due) {
-        await timer.fn()
+      let fired = 0
+      for (;;) {
+        // Let the callback's own async work settle so a timer it schedules is
+        // visible to this loop before we decide the tick is done.
+        await new Promise((resolve) => setImmediate(resolve))
+        const [next] = clock.timers
+          .filter((timer) => timer.at <= clock.now)
+          .sort((a, b) => a.at - b.at)
+        if (!next) return
+        clock.timers = clock.timers.filter((timer) => timer.id !== next.id)
+        fired += 1
+        if (fired > MAX_TIMERS_PER_TICK) {
+          throw new Error(
+            `fake clock fired ${fired} timers within tick(${ms}) — ` +
+              "something is rescheduling with no delay",
+          )
+        }
+        await next.fn()
       }
-      await new Promise((resolve) => setImmediate(resolve))
     },
   }
   return clock
