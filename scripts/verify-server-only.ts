@@ -44,6 +44,18 @@ const PURE_CLIENT_MODULES = [
 const FORBIDDEN_IMPORT =
   /(?:from\s+["'](?:server-only|csv-parse(?:\/sync)?)["'])|(?:import\s+["'](?:server-only|csv-parse(?:\/sync)?)["'])|process\.env\b/
 
+const SERVER_ONLY_MODULES = [
+  path.join(ROOT, "lib", "settings-admin.ts"),
+  path.join(ROOT, "lib", "env-health.ts"),
+  path.join(ROOT, "lib", "queue-health.ts"),
+  path.join(ROOT, "lib", "queue-clear.ts"),
+  path.join(ROOT, "lib", "logs.ts"),
+]
+
+const CLIENT_IMPORTABLE_MODULES = [
+  path.join(ROOT, "lib", "settings-schema.ts"),
+]
+
 function collectTsFiles(dir: string, out: string[] = []): string[] {
   if (!existsSync(dir)) return out
   if (dir.includes(`${path.sep}.claude${path.sep}`)) return out
@@ -156,9 +168,33 @@ function assertLandingPageBrowserSafe(): void {
   )
 }
 
+function assertServerOnlyModules(): void {
+  for (const file of SERVER_ONLY_MODULES) {
+    const source = readFileSync(file, "utf8")
+    if (!source.includes('import "server-only"')) {
+      console.error(`FAIL  ${path.relative(ROOT, file)} missing server-only guard`)
+      process.exit(1)
+    }
+  }
+  console.log("PASS  new server-only modules declare import \"server-only\"")
+}
+
+function assertClientImportableModules(): void {
+  for (const file of CLIENT_IMPORTABLE_MODULES) {
+    const source = readFileSync(file, "utf8")
+    if (source.includes('import "server-only"')) {
+      console.error(`FAIL  ${path.relative(ROOT, file)} must not be server-only`)
+      process.exit(1)
+    }
+  }
+  console.log("PASS  lib/settings-schema.ts is deliberately not server-only")
+}
+
 function main(): void {
   assertLandingPageBrowserSafe()
   assertPureModulesBrowserSafe()
+  assertServerOnlyModules()
+  assertClientImportableModules()
   cleanup()
 
   try {

@@ -121,7 +121,9 @@ export async function runBootRecovery(): Promise<void> {
   await reconcileSiteSync()
 }
 
-export function startPeriodicReconcile(): () => void {
+export function startPeriodicReconcile(opts?: {
+  onAfterTick?: () => Promise<void> | void
+}): () => void {
   let running = false
 
   const timer = setInterval(() => {
@@ -133,6 +135,7 @@ export function startPeriodicReconcile(): () => void {
     running = true
     void reconcile({ graceMs: PERIODIC_GRACE_MS })
       .then(() => reconcileSiteSync())
+      .then(() => opts?.onAfterTick?.())
       .catch((error) => {
         console.error("[recovery] periodic reconcile failed:", error)
       })
