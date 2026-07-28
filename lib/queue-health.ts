@@ -337,7 +337,23 @@ async function listRecentJobRuns(
 export async function closeHealthRedis(): Promise<void> {
   const clients = [...healthRedisByUrl.values()]
   healthRedisByUrl.clear()
-  await Promise.all(clients.map((client) => client.quit()))
+  await Promise.all(
+    clients.map(async (client) => {
+      // QUIT is a command: on a client that never connected — the case after a
+      // down probe — it hangs or rejects, and leaves a retry handle open that
+      // trips a libuv assertion when the process exits. disconnect() tears the
+      // socket and its retry timer down synchronously.
+      if (client.status !== "ready") {
+        client.disconnect()
+        return
+      }
+      try {
+        await client.quit()
+      } catch {
+        client.disconnect()
+      }
+    }),
+  )
 }
 
 export { PIPELINE_QUEUE_NAME }
