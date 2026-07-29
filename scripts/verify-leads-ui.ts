@@ -11,6 +11,10 @@
  * a mutation is involved, re-reads the database to confirm the two agree.
  */
 
+import { existsSync, mkdirSync, rmSync } from "node:fs"
+import path from "node:path"
+
+import ffmpegPath from "ffmpeg-static"
 import { chromium, type Browser, type Page } from "playwright"
 import { createClient } from "@supabase/supabase-js"
 
@@ -18,7 +22,9 @@ import type { Database } from "../lib/database.types"
 import { SILENCE_MS } from "../lib/dashboard-connection"
 import { assertEnvOrExit } from "../lib/env-node"
 import { closeQueueConnections } from "../lib/queue"
+import { runProcess } from "../lib/video/spawn"
 import { pendingJobIds, removeJobsThisRunOrphaned } from "./queue-sweep"
+import { launchAuthenticatedPage } from "./fixtures/ui-harness"
 import { SESSION_COOKIE_NAME } from "../lib/session"
 
 interface CheckResult {
@@ -40,7 +46,136 @@ const CHECKS = [
   "selecting a row does not open its drawer",
   "bulk delete refreshes the table",
   "stream loss degrades to polling and recovers",
+  "drawer recording decodes and advances",
+  "drawer final video decodes and advances",
 ] as const
+
+const FFMPEG = ffmpegPath!
+
+async function generatePipelineFixtureMp4(outputPath: string): Promise<void> {
+  mkdirSync(path.dirname(outputPath), { recursive: true })
+  await runProcess(FFMPEG, [
+    "-y",
+    "-f",
+    "lavfi",
+    "-i",
+    "testsrc=duration=2:size=320x240:rate=15",
+    "-f",
+    "lavfi",
+    "-i",
+    "sine=frequency=440:duration=2",
+    "-c:v",
+    "libx264",
+    "-pix_fmt",
+    "yuv420p",
+    "-c:a",
+    "aac",
+    "-movflags",
+    "+faststart",
+    "-shortest",
+    outputPath,
+  ])
+}
+
+/**
+ * Assert a drawer `<video>` decodes H.264+AAC and the clock advances. A missing
+ * element is a leg failure, not a throw — one regression must not hide the rest.
+ */
+async function assertDrawerVideoPlayback(
+  page: Page,
+  videoIndex: number,
+  urlPattern: RegExp,
+): Promise<{ ok: true; detail: string } | { ok: false; detail: string }> {
+  let saw206 = false
+  const onResponse = (response: { url: () => string; status: () => number }) => {
+    if (urlPattern.test(response.url()) && response.status() === 206) {
+      saw206 = true
+    }
+  }
+  page.on("response", onResponse)
+
+  try {
+    const videos = page.locator("section video")
+    const count = await videos.count()
+    if (count <= videoIndex) {
+      return {
+        ok: false,
+        detail: `expected video[${videoIndex}], found ${count}`,
+      }
+    }
+
+    const video = videos.nth(videoIndex)
+    let attached = true
+    await video.waitFor({ state: "attached", timeout: 10_000 }).catch(() => {
+      attached = false
+    })
+    if (!attached) {
+      return { ok: false, detail: "video element never appeared" }
+    }
+
+    let playRejected = false
+    await video.evaluate(async (el) => {
+      const v = el as HTMLVideoElement
+      v.muted = true
+      try {
+        await v.play()
+      } catch {
+        // waitForFunction below surfaces the real failure.
+      }
+    }).catch(() => {
+      playRejected = true
+    })
+    if (playRejected) {
+      return { ok: false, detail: "play() threw before playback could settle" }
+    }
+
+    try {
+      await page.waitForFunction(
+        (idx) => {
+          const v = document.querySelectorAll("section video")[
+            idx
+          ] as HTMLVideoElement | undefined
+          if (!v) return false
+          if (v.error !== null) {
+            throw new Error(`video.error code ${v.error.code}`)
+          }
+          return v.readyState >= 3 && v.videoWidth > 0 && v.currentTime >= 0.2
+        },
+        videoIndex,
+        { timeout: 20_000, polling: 100 },
+      )
+    } catch (error) {
+      const diag = await page.evaluate((idx) => {
+        const v = document.querySelectorAll("section video")[
+          idx
+        ] as HTMLVideoElement | undefined
+        if (!v) return "element missing"
+        return JSON.stringify({
+          error: v.error?.code ?? null,
+          readyState: v.readyState,
+          videoWidth: v.videoWidth,
+          currentTime: v.currentTime,
+          networkState: v.networkState,
+        })
+      }, videoIndex)
+      const reason =
+        error instanceof Error && error.message.includes("video.error")
+          ? error.message
+          : `playback did not settle: ${diag}`
+      return {
+        ok: false,
+        detail: `${reason}${saw206 ? "" : " (no 206 observed)"}`,
+      }
+    }
+
+    return {
+      ok: true,
+      detail: saw206 ? "decoded, advanced, 206 seen" : "decoded and advanced",
+    }
+  } finally {
+    page.off("response", onResponse)
+  }
+}
 
 function pass(name: string, detail = "ok"): void {
   results.push({ name, state: "pass", detail })
@@ -168,6 +303,8 @@ async function main(): Promise<void> {
   let campaignId: string | null = null
   const leadIds: string[] = []
   let browser: Browser | null = null
+  const mediaDirAbs = path.join(env.LOCAL_STORAGE_ROOT, "verify", runId)
+  const mediaRelPath = `verify/${runId}/fixture.mp4`
   // The re-queue leg enqueues through the dev server, so this script leaks
   // pipeline jobs exactly like verify:leads does — just from the other side of
   // the HTTP boundary.
@@ -303,6 +440,17 @@ async function main(): Promise<void> {
         attempt_count: 1,
       },
     )
+    const mediaLead = await seedLead(
+      "media",
+      {
+        company: `UI Media ${runId}`,
+        domain: `ui-media-${runId}.example.com`,
+      },
+      {
+        status: "queued",
+        current_step: "deploy",
+      },
+    )
 
     if (
       !deleteA ||
@@ -310,7 +458,8 @@ async function main(): Promise<void> {
       !introLead ||
       !urlLead ||
       !guardLead ||
-      !requeueLead
+      !requeueLead ||
+      !mediaLead
     ) {
       skipAll(`could not seed fixture leads — ${seedError}`)
       summarize()
@@ -332,6 +481,79 @@ async function main(): Promise<void> {
       kind: "resumed",
       message: "Lead manually resumed and re-queued.",
     })
+
+    // Real H.264+AAC bytes — same codec settings as the pipeline — so the
+    // playback legs prove decode, not merely that a route returns bytes.
+    try {
+      await generatePipelineFixtureMp4(path.join(mediaDirAbs, "fixture.mp4"))
+    } catch (error) {
+      skip(
+        "drawer recording decodes and advances",
+        `fixture encode failed: ${(error as Error).message}`,
+      )
+      skip(
+        "drawer final video decodes and advances",
+        `fixture encode failed: ${(error as Error).message}`,
+      )
+    }
+
+    const fixtureReady = existsSync(path.join(mediaDirAbs, "fixture.mp4"))
+    if (fixtureReady) {
+      const { data: recordingRow, error: recordingError } = await supabase
+        .from("recordings")
+        .insert({
+          lead_id: mediaLead.leadId,
+          local_path: mediaRelPath,
+          purged_at: null,
+          duration_ms: 2000,
+        })
+        .select("id")
+        .single()
+
+      if (recordingError || !recordingRow) {
+        skip(
+          "drawer recording decodes and advances",
+          `recordings insert: ${recordingError?.message ?? "no row"}`,
+        )
+        skip(
+          "drawer final video decodes and advances",
+          `recordings insert: ${recordingError?.message ?? "no row"}`,
+        )
+      } else {
+        await supabase
+          .from("campaign_leads")
+          .update({ recording_id: recordingRow.id })
+          .eq("id", mediaLead.id)
+
+        const { data: videoRow, error: videoError } = await supabase
+          .from("videos")
+          .insert({
+            campaign_lead_id: mediaLead.id,
+            web_path: mediaRelPath,
+            web_public_url: null,
+            duration_ms: 2000,
+            used_speed_floor: false,
+          })
+          .select("id")
+          .single()
+
+        if (videoError || !videoRow) {
+          skip(
+            "drawer recording decodes and advances",
+            `videos insert: ${videoError?.message ?? "no row"}`,
+          )
+          skip(
+            "drawer final video decodes and advances",
+            `videos insert: ${videoError?.message ?? "no row"}`,
+          )
+        } else {
+          await supabase
+            .from("campaign_leads")
+            .update({ video_id: videoRow.id })
+            .eq("id", mediaLead.id)
+        }
+      }
+    }
 
     browser = await chromium.launch()
     const context = await browser.newContext({
@@ -753,6 +975,132 @@ async function main(): Promise<void> {
       }
     }
 
+    // ---- legs 10–11: in-drawer video decode + playback --------------------
+    const playbackAlreadySkipped = results.some(
+      (r) =>
+        r.name === "drawer recording decodes and advances" &&
+        r.state === "skip",
+    )
+
+    if (!playbackAlreadySkipped) {
+      let chromeBrowser: Browser | null = null
+      let chromePage: Page | null = null
+
+      // Only a launch failure means "Chrome is not installed". Anything that
+      // goes wrong afterwards is a real defect and must fail the leg — a
+      // catch-all here reported a broken /leads page as a skip and exited 0.
+      try {
+        const chrome = await launchAuthenticatedPage(login.cookie, BASE_URL, {
+          channel: "chrome",
+        })
+        chromeBrowser = chrome.browser
+        chromePage = chrome.page
+      } catch (error) {
+        skip(
+          "drawer recording decodes and advances",
+          `Google Chrome not available: ${(error as Error).message}`,
+        )
+        skip(
+          "drawer final video decodes and advances",
+          `Google Chrome not available: ${(error as Error).message}`,
+        )
+      }
+
+      if (chromePage) {
+       const page = chromePage
+       try {
+        const canPlay = await page.evaluate(() =>
+          document
+            .createElement("video")
+            .canPlayType('video/mp4; codecs="avc1.42E01E"'),
+        )
+        if (!canPlay) {
+          skip(
+            "drawer recording decodes and advances",
+            "browser cannot decode H.264",
+          )
+          skip(
+            "drawer final video decodes and advances",
+            "browser cannot decode H.264",
+          )
+        } else {
+          await page.goto(`${leadsUrl}&lead=${mediaLead.id}`, {
+            waitUntil: "domcontentloaded",
+          })
+
+          let drawerReady = true
+          await page
+            .getByRole("heading", { name: "Recording" })
+            .waitFor({ timeout: 15_000 })
+            .catch(() => {
+              drawerReady = false
+            })
+
+          if (!drawerReady) {
+            fail(
+              "drawer recording decodes and advances",
+              "drawer never finished loading — Recording section missing",
+            )
+            fail(
+              "drawer final video decodes and advances",
+              "drawer never finished loading — Recording section missing",
+            )
+            await shoot(page, "playback-drawer-loading")
+          } else {
+            const recordingResult = await assertDrawerVideoPlayback(
+              page,
+              0,
+              new RegExp(`/api/leads/${mediaLead.id}/recording`),
+            )
+            if (recordingResult.ok) {
+              pass(
+                "drawer recording decodes and advances",
+                recordingResult.detail,
+              )
+            } else {
+              fail(
+                "drawer recording decodes and advances",
+                recordingResult.detail,
+              )
+              await shoot(page, "playback-recording")
+            }
+
+            const finalResult = await assertDrawerVideoPlayback(
+              page,
+              1,
+              new RegExp(`/api/leads/${mediaLead.id}/video`),
+            )
+            if (finalResult.ok) {
+              pass(
+                "drawer final video decodes and advances",
+                finalResult.detail,
+              )
+            } else {
+              fail(
+                "drawer final video decodes and advances",
+                finalResult.detail,
+              )
+              await shoot(page, "playback-final")
+            }
+          }
+        }
+       } catch (error) {
+        // Chrome launched, so this is a defect in the screen or the run — not
+        // a missing browser. Report the legs that have not spoken yet; the
+        // ones that already failed keep their specific reason.
+        const detail = `unexpected error: ${(error as Error).message}`
+        for (const name of [
+          "drawer recording decodes and advances",
+          "drawer final video decodes and advances",
+        ] as const) {
+          if (!results.some((entry) => entry.name === name)) fail(name, detail)
+        }
+       } finally {
+        await chromeBrowser?.close().catch(() => undefined)
+       }
+      }
+    }
+
     if (consoleErrors.length > 0) {
       console.log(
         `\nNOTE  ${consoleErrors.length} uncaught page error(s): ${consoleErrors
@@ -762,6 +1110,7 @@ async function main(): Promise<void> {
     }
   } finally {
     await browser?.close().catch(() => undefined)
+    rmSync(mediaDirAbs, { recursive: true, force: true })
     if (campaignId) {
       await supabase.from("campaigns").delete().eq("id", campaignId)
     }
