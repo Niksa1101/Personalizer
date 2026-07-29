@@ -134,8 +134,11 @@ export async function loginSessionCookie(
 export async function launchAuthenticatedPage(
   cookie: string,
   baseUrl = UI_BASE_URL,
+  options?: { channel?: string },
 ): Promise<{ browser: Browser; context: BrowserContext; page: Page }> {
-  const browser = await chromium.launch()
+  const browser = await chromium.launch(
+    options?.channel ? { channel: options.channel } : undefined,
+  )
   const context = await browser.newContext({
     viewport: { width: 1600, height: 1000 },
   })
