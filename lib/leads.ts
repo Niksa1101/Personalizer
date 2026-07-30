@@ -1,6 +1,6 @@
 import "server-only"
 
-import { removeFile } from "@/lib/local-file"
+import { deleteContainedRelPath } from "@/lib/local-file"
 import type { LeadEditInput } from "@/lib/lead-edit"
 import {
   buildLeadSearchOrFilter,
@@ -12,7 +12,6 @@ import { retryCampaignLead } from "@/lib/pipeline-control"
 import type { PipelineEventMeta } from "@/lib/pipeline-types"
 import { requestSiteSync } from "@/lib/site-sync"
 import { resolveMany } from "@/lib/settings"
-import { storageAbs } from "@/lib/storage"
 import { getSupabaseAdmin, type PostgrestFilterable } from "@/lib/supabase"
 import { normalizeWebsiteUrl } from "@/lib/website-url"
 import type { Database } from "@/lib/database.types"
@@ -95,6 +94,7 @@ export type LeadDetail = LeadListRow & {
   recording: RecordingRow | null
   otherCampaigns: Array<{ id: string; name: string; ref: string }>
   maxStretchFactor: number
+  recordingRetentionDays: number
   pausedReason: { sentence: string; createdAt: string } | null
 }
 
@@ -292,7 +292,7 @@ export async function getLeadDetail(
         .select("campaigns(id, name, ref)")
         .eq("lead_id", row.leads.id)
         .neq("id", campaignLeadId),
-      resolveMany(["merge.max_stretch_factor"]),
+      resolveMany(["merge.max_stretch_factor", "recorder.retention_days"]),
     ])
 
   if (eventsResult.error) {
@@ -341,6 +341,7 @@ export async function getLeadDetail(
     recording: recordingResult.data,
     otherCampaigns,
     maxStretchFactor: settings["merge.max_stretch_factor"],
+    recordingRetentionDays: settings["recorder.retention_days"],
     pausedReason,
   }
 }
@@ -366,7 +367,7 @@ async function purgeLeadRecording(recordingId: string): Promise<void> {
   if (error) throw new Error(`Failed to purge recording: ${error.message}`)
 
   if (existing.local_path) {
-    await removeFile(storageAbs(existing.local_path))
+    await deleteContainedRelPath(existing.local_path)
   }
 
   const { data: otherLeads } = await getSupabaseAdmin()

@@ -48,6 +48,9 @@ const CHECKS = [
   "stream loss degrades to polling and recovers",
   "drawer recording decodes and advances",
   "drawer final video decodes and advances",
+  "drawer shows purged copy",
+  "drawer shows missing-or-unplayable copy with re-record button",
+  "drawer drops screenshot tile when file gone",
 ] as const
 
 const FFMPEG = ffmpegPath!
@@ -369,6 +372,43 @@ async function main(): Promise<void> {
         current_step: "deploy",
       },
     )
+    const purgedLead = await seedLead(
+      "purged",
+      {
+        company: `UI Purged ${runId}`,
+        domain: `ui-purged-${runId}.example.com`,
+      },
+      {
+        status: "deployed",
+        current_step: "deploy",
+        netlify_url: `https://example.com/verify-ui-${runId}-purged`,
+      },
+    )
+    const missingLead = await seedLead(
+      "missing",
+      {
+        company: `UI Missing ${runId}`,
+        domain: `ui-missing-${runId}.example.com`,
+      },
+      {
+        status: "failed",
+        current_step: "recording",
+        error_code: "missing_asset",
+        attempt_count: 1,
+      },
+    )
+    const screenshotLead = await seedLead(
+      "shots",
+      {
+        company: `UI Shots ${runId}`,
+        domain: `ui-shots-${runId}.example.com`,
+      },
+      {
+        status: "deployed",
+        current_step: "deploy",
+        netlify_url: `https://example.com/verify-ui-${runId}-shots`,
+      },
+    )
 
     if (
       !deleteA ||
@@ -377,7 +417,10 @@ async function main(): Promise<void> {
       !urlLead ||
       !guardLead ||
       !requeueLead ||
-      !mediaLead
+      !mediaLead ||
+      !purgedLead ||
+      !missingLead ||
+      !screenshotLead
     ) {
       skipAll(`could not seed fixture leads — ${seedError}`)
       printUiSummary(results)
@@ -471,6 +514,78 @@ async function main(): Promise<void> {
             .eq("id", mediaLead.id)
         }
       }
+    }
+
+    const shotRelPrefix = `verify/${runId}/shots`
+    const { data: purgedRecording, error: purgedRecordingError } =
+      await supabase
+        .from("recordings")
+        .insert({
+          lead_id: purgedLead.leadId,
+          local_path: null,
+          purged_at: new Date().toISOString(),
+          duration_ms: 2000,
+        })
+        .select("id")
+        .single()
+    if (purgedRecordingError || !purgedRecording) {
+      skip(
+        "drawer shows purged copy",
+        `recordings insert: ${purgedRecordingError?.message ?? "no row"}`,
+      )
+    } else {
+      await supabase
+        .from("campaign_leads")
+        .update({ recording_id: purgedRecording.id })
+        .eq("id", purgedLead.id)
+    }
+
+    const { data: missingRecording, error: missingRecordingError } =
+      await supabase
+        .from("recordings")
+        .insert({
+          lead_id: missingLead.leadId,
+          local_path: `${shotRelPrefix}/gone-recording.mp4`,
+          purged_at: null,
+          duration_ms: 2000,
+        })
+        .select("id")
+        .single()
+    if (missingRecordingError || !missingRecording) {
+      skip(
+        "drawer shows missing-or-unplayable copy with re-record button",
+        `recordings insert: ${missingRecordingError?.message ?? "no row"}`,
+      )
+    } else {
+      await supabase
+        .from("campaign_leads")
+        .update({ recording_id: missingRecording.id })
+        .eq("id", missingLead.id)
+    }
+
+    const { data: screenshotRecording, error: screenshotRecordingError } =
+      await supabase
+        .from("recordings")
+        .insert({
+          lead_id: screenshotLead.leadId,
+          local_path: `${shotRelPrefix}/recording.mp4`,
+          purged_at: null,
+          duration_ms: 2000,
+          screenshot_before_path: `${shotRelPrefix}/before.png`,
+          screenshot_after_path: `${shotRelPrefix}/after.png`,
+        })
+        .select("id")
+        .single()
+    if (screenshotRecordingError || !screenshotRecording) {
+      skip(
+        "drawer drops screenshot tile when file gone",
+        `recordings insert: ${screenshotRecordingError?.message ?? "no row"}`,
+      )
+    } else {
+      await supabase
+        .from("campaign_leads")
+        .update({ recording_id: screenshotRecording.id })
+        .eq("id", screenshotLead.id)
     }
 
     const launched = await launchAuthenticatedPage(login.cookie)
@@ -1008,6 +1123,86 @@ async function main(): Promise<void> {
         await chromeBrowser?.close().catch(() => undefined)
        }
       }
+    }
+
+    // ---- Phase 16: purged / missing / screenshot drawer copy ----------------
+    await page.goto(`${leadsUrl}&lead=${purgedLead.id}`, {
+      waitUntil: "domcontentloaded",
+    })
+    await page
+      .getByRole("heading", { name: "Recording" })
+      .waitFor({ timeout: 10_000 })
+      .catch(() => undefined)
+    await sleep(1_500)
+    const recordingSection = page
+      .locator("section")
+      .filter({ has: page.getByRole("heading", { name: "Recording", exact: true }) })
+    const purgedCopy = recordingSection.getByText(
+      /Raw recording purged after \d+ days\./,
+    )
+    const purgedRerecord = recordingSection.getByRole("button", {
+      name: "Re-record",
+    })
+    if ((await purgedCopy.count()) > 0 && (await purgedRerecord.count()) === 0) {
+      pass("drawer shows purged copy")
+    } else if ((await purgedCopy.count()) === 0) {
+      fail("drawer shows purged copy", "purged sentence not rendered")
+      await shoot(page, "purged-copy")
+    } else {
+      fail(
+        "drawer shows purged copy",
+        `Re-record button still visible (count=${await purgedRerecord.count()})`,
+      )
+      await shoot(page, "purged-copy")
+    }
+
+    await page.goto(`${leadsUrl}&lead=${missingLead.id}`, {
+      waitUntil: "domcontentloaded",
+    })
+    const missingCopy = page.getByText("Recording file is missing or unplayable.")
+    const rerecord = page.getByRole("button", { name: "Re-record" })
+    await page
+      .locator("section video")
+      .first()
+      .waitFor({ state: "attached", timeout: 10_000 })
+      .catch(() => undefined)
+    await sleep(1_500)
+    if ((await missingCopy.count()) === 0) {
+      fail(
+        "drawer shows missing-or-unplayable copy with re-record button",
+        "missing/unplayable sentence not rendered",
+      )
+      await shoot(page, "missing-copy")
+    } else if ((await rerecord.count()) === 0) {
+      fail(
+        "drawer shows missing-or-unplayable copy with re-record button",
+        "sentence rendered but no Re-record button",
+      )
+      await shoot(page, "missing-copy")
+    } else {
+      pass(
+        "drawer shows missing-or-unplayable copy with re-record button",
+      )
+    }
+
+    await page.goto(`${leadsUrl}&lead=${screenshotLead.id}`, {
+      waitUntil: "domcontentloaded",
+    })
+    await page
+      .getByRole("heading", { name: "Recording" })
+      .waitFor({ timeout: 10_000 })
+      .catch(() => undefined)
+    await sleep(1_500)
+    const beforeImg = page.locator('img[alt="Before scroll"]')
+    const afterImg = page.locator('img[alt="After scroll"]')
+    if ((await beforeImg.count()) > 0 || (await afterImg.count()) > 0) {
+      fail(
+        "drawer drops screenshot tile when file gone",
+        `tiles still rendered (before=${await beforeImg.count()} after=${await afterImg.count()})`,
+      )
+      await shoot(page, "screenshot-tiles")
+    } else {
+      pass("drawer drops screenshot tile when file gone")
     }
 
     if (consoleErrors.length > 0) {

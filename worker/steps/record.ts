@@ -1,6 +1,4 @@
-import { stat } from "node:fs/promises"
-
-import { removeFile } from "@/lib/local-file"
+import { deleteContainedRelPath } from "@/lib/local-file"
 import {
   hostFromLead,
   parseStubFailureHost,
@@ -10,21 +8,14 @@ import {
   abortableDelay,
   PipelineStepError,
 } from "@/lib/pipeline-types"
-import {
-  evaluateRecordingPrecheck,
-  PURGED_RERECORD_NOTE,
-} from "@/lib/recording-precheck"
 import { resolveMany } from "@/lib/settings"
 import { leadSlug } from "@/lib/slug"
-import { storageAbs } from "@/lib/storage"
 
 import {
   getUsableRecording,
   insertFailedRecording,
-  insertPipelineEvent,
   insertRecording,
   linkRecordingToCampaignLead,
-  purgeRecording,
   updateRecordingCapture,
   writeRecorderLog,
 } from "../db"
@@ -33,6 +24,7 @@ import {
   captureRecording,
   resolveWebsiteUrl,
 } from "../recorder"
+import { runRecordPrecheckGate } from "./record-precheck-gate"
 import type { Step, StepContext } from "./shared"
 
 function batchFolder(sourceBatchId: string | null): string {
@@ -85,66 +77,18 @@ export const recordStep: Step = {
     )
 
     const forcedRerecord = isForcedRerecord(ctx)
-    const existing = await getUsableRecording(lead.lead.id)
-    const precheck = await evaluateRecordingPrecheck({
-      recording: existing,
+    const gateResult = await runRecordPrecheckGate({
+      campaignLeadId: campaignLead.id,
+      leadId: lead.lead.id,
       forcedRerecord,
-      statFile: async (relPath) => {
-        try {
-          await stat(storageAbs(relPath))
-          return { exists: true }
-        } catch {
-          return { exists: false }
-        }
-      },
     })
-
-    if (precheck.action === "missing_asset") {
-      throw new PipelineStepError(
-        "missing_asset",
-        "Recording file is missing on disk.",
-      )
-    }
-
-    if (precheck.action === "reuse") {
-      await writeRecorderLog({
-        level: "info",
-        message: "Reusing existing recording for lead.",
-        campaignLeadId: campaignLead.id,
-        meta: {
-          recordingId: precheck.recordingId,
-          path: precheck.path,
-        },
-      })
-
-      await linkRecordingToCampaignLead(campaignLead.id, precheck.recordingId)
-
-      await insertPipelineEvent({
-        campaignLeadId: campaignLead.id,
-        kind: "note",
-        step: "recording",
-        message: "Reused existing website recording.",
-        meta: {
-          duration_ms: undefined,
-        },
-      })
-
+    if (gateResult === "reuse") {
       return
     }
 
-    if (precheck.action === "record_purged") {
-      const purgedPath = await purgeRecording(precheck.recordingId)
-      if (purgedPath) {
-        await removeFile(storageAbs(purgedPath)).catch(() => undefined)
-      }
-
-      await insertPipelineEvent({
-        campaignLeadId: campaignLead.id,
-        kind: "note",
-        step: "recording",
-        message: PURGED_RERECORD_NOTE,
-      })
-    }
+    const existing = forcedRerecord
+      ? await getUsableRecording(lead.lead.id)
+      : null
 
     const slugValue = leadSlug(lead.lead)
     const batchId = batchFolder(lead.lead.source_batch_id)
@@ -217,7 +161,7 @@ export const recordStep: Step = {
           screenshotAfterPath: captured.screenshotAfterRelPath,
         })
       } catch (insertError) {
-        await removeFile(storageAbs(captured.recordingRelPath)).catch(
+        await deleteContainedRelPath(captured.recordingRelPath).catch(
           () => undefined,
         )
 

@@ -12,6 +12,8 @@ import {
 } from "node:fs/promises"
 import path from "node:path"
 
+import { assertPathContained, storageAbs } from "@/lib/storage"
+
 /** Move a file, creating parent dirs; copy+unlink if rename crosses devices. */
 export async function moveFile(fromAbs: string, toAbs: string): Promise<void> {
   await mkdir(path.dirname(toAbs), { recursive: true })
@@ -36,16 +38,61 @@ export async function removeFile(filePath: string): Promise<void> {
   await removeIfExists(filePath)
 }
 
+export function isEnoent(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    "code" in error &&
+    (error as NodeJS.ErrnoException).code === "ENOENT"
+  )
+}
+
+export class PathEscapeError extends Error {
+  constructor(readonly relPath: string) {
+    super(`Refusing to delete a path outside LOCAL_STORAGE_ROOT: ${relPath}`)
+  }
+}
+
+export type DeleteOutcome = {
+  /** unlink succeeded */
+  deleted: boolean
+  /** file was already gone — safe to null the pointer (Q11a) */
+  absent: boolean
+  /** measured before unlink; 0 when absent */
+  bytes: number
+}
+
+/** The only delete path Phase 16 uses. Resolves against LOCAL_STORAGE_ROOT and
+ *  refuses escapes — a containment failure is an error, never a silent skip. */
+export async function deleteContainedRelPath(
+  relPath: string,
+): Promise<DeleteOutcome> {
+  const abs = storageAbs(relPath)
+  if (!assertPathContained(abs)) throw new PathEscapeError(relPath)
+
+  let bytes = 0
+  try {
+    bytes = (await stat(abs)).size
+  } catch (error) {
+    if (isEnoent(error)) return { deleted: false, absent: true, bytes: 0 }
+    throw error
+  }
+
+  try {
+    await unlink(abs)
+  } catch (error) {
+    if (isEnoent(error)) return { deleted: false, absent: true, bytes: 0 }
+    throw error
+  }
+
+  return { deleted: true, absent: false, bytes }
+}
+
 /** Recursively remove a directory; ignore ENOENT. */
 export async function removeDir(dirPath: string): Promise<void> {
   try {
     await rm(dirPath, { recursive: true, force: true })
   } catch (error) {
-    if (
-      error instanceof Error &&
-      "code" in error &&
-      (error as NodeJS.ErrnoException).code === "ENOENT"
-    ) {
+    if (isEnoent(error)) {
       return
     }
     throw error
@@ -57,11 +104,7 @@ export async function removeIfExists(filePath: string): Promise<void> {
   try {
     await unlink(filePath)
   } catch (error) {
-    if (
-      error instanceof Error &&
-      "code" in error &&
-      (error as NodeJS.ErrnoException).code === "ENOENT"
-    ) {
+    if (isEnoent(error)) {
       return
     }
     throw error
@@ -79,11 +122,7 @@ export async function sweepStaleIntroUploadTemps(
   try {
     entries = await readdir(tmpDirAbs)
   } catch (error) {
-    if (
-      error instanceof Error &&
-      "code" in error &&
-      (error as NodeJS.ErrnoException).code === "ENOENT"
-    ) {
+    if (isEnoent(error)) {
       return
     }
     throw error
@@ -99,13 +138,7 @@ export async function sweepStaleIntroUploadTemps(
         try {
           fileStat = await stat(filePath)
         } catch (error) {
-          // Another worker's sweep (or an upload's cleanup) removed it between
-          // readdir and stat — nothing to do, and this must not fail boot.
-          if (
-            error instanceof Error &&
-            "code" in error &&
-            (error as NodeJS.ErrnoException).code === "ENOENT"
-          ) {
+          if (isEnoent(error)) {
             return
           }
           throw error
@@ -126,11 +159,7 @@ export async function sweepStaleImportUploadTemps(
   try {
     entries = await readdir(tmpDirAbs)
   } catch (error) {
-    if (
-      error instanceof Error &&
-      "code" in error &&
-      (error as NodeJS.ErrnoException).code === "ENOENT"
-    ) {
+    if (isEnoent(error)) {
       return
     }
     throw error
@@ -146,11 +175,7 @@ export async function sweepStaleImportUploadTemps(
         try {
           fileStat = await stat(filePath)
         } catch (error) {
-          if (
-            error instanceof Error &&
-            "code" in error &&
-            (error as NodeJS.ErrnoException).code === "ENOENT"
-          ) {
+          if (isEnoent(error)) {
             return
           }
           throw error
@@ -163,23 +188,33 @@ export async function sweepStaleImportUploadTemps(
 }
 
 const REC_TMP_PREFIX = "rec-"
-const MERGE_TEMP_PATTERN =
-  /^(?:final|web)\..+\.tmp\.mp4$|^poster\..+\.tmp\.jpg$/
+const TEMP_STEMS_MERGE = ["final", "web"] as const
+/** Adds the recorder's transcode temp. Superset of MERGE_TEMP_PATTERN. */
+const TEMP_STEMS_ALL = [...TEMP_STEMS_MERGE, "recording"] as const
+
+function tempPattern(stems: readonly string[]): RegExp {
+  return new RegExp(
+    `^(?:${stems.join("|")})\\..+\\.tmp\\.mp4$|^poster\\..+\\.tmp\\.jpg$`,
+  )
+}
+
+/** Pre-merge sweep (worker/video/merge.ts:254) — behavior unchanged. */
+export const MERGE_TEMP_PATTERN = tempPattern(TEMP_STEMS_MERGE)
+/** Daily sweep only. Widening the pre-merge default would let a sibling job's
+ *  10-minute sweep eat a live capture's transcode temp — see carried item C1. */
+export const DAILY_TEMP_PATTERN = tempPattern(TEMP_STEMS_ALL)
 
 /** Remove orphaned merge temps left by a crash mid-encode. */
 export async function sweepStaleMergeTemps(
   outputDirAbs: string,
   maxAgeMs = 10 * 60 * 1000,
+  pattern: RegExp = MERGE_TEMP_PATTERN,
 ): Promise<void> {
   let entries: string[]
   try {
     entries = await readdir(outputDirAbs)
   } catch (error) {
-    if (
-      error instanceof Error &&
-      "code" in error &&
-      (error as NodeJS.ErrnoException).code === "ENOENT"
-    ) {
+    if (isEnoent(error)) {
       return
     }
     throw error
@@ -188,18 +223,14 @@ export async function sweepStaleMergeTemps(
   const cutoff = Date.now() - maxAgeMs
   await Promise.all(
     entries
-      .filter((name) => MERGE_TEMP_PATTERN.test(name))
+      .filter((name) => pattern.test(name))
       .map(async (name) => {
         const filePath = path.join(outputDirAbs, name)
         let fileStat
         try {
           fileStat = await stat(filePath)
         } catch (error) {
-          if (
-            error instanceof Error &&
-            "code" in error &&
-            (error as NodeJS.ErrnoException).code === "ENOENT"
-          ) {
+          if (isEnoent(error)) {
             return
           }
           throw error
@@ -220,11 +251,7 @@ export async function sweepStaleRecorderTemps(
   try {
     entries = await readdir(tmpDirAbs)
   } catch (error) {
-    if (
-      error instanceof Error &&
-      "code" in error &&
-      (error as NodeJS.ErrnoException).code === "ENOENT"
-    ) {
+    if (isEnoent(error)) {
       return
     }
     throw error
@@ -240,11 +267,7 @@ export async function sweepStaleRecorderTemps(
         try {
           dirStat = await stat(dirPath)
         } catch (error) {
-          if (
-            error instanceof Error &&
-            "code" in error &&
-            (error as NodeJS.ErrnoException).code === "ENOENT"
-          ) {
+          if (isEnoent(error)) {
             return
           }
           throw error

@@ -86,6 +86,21 @@ describe("evaluateRecordingPrecheck", () => {
     })
   })
 
+  it("returns record_purged when purged_at is set even if the file still exists", async () => {
+    const result = await evaluateRecordingPrecheck({
+      recording: {
+        ...row,
+        purged_at: "2026-01-01T00:00:00Z",
+      },
+      forcedRerecord: false,
+      statFile: async () => ({ exists: true }),
+    })
+    assert.deepEqual(result, {
+      action: "record_purged",
+      recordingId: "rec-1",
+    })
+  })
+
   it("returns record_fresh on forced re-record even when a usable file exists", async () => {
     const result = await evaluateRecordingPrecheck({
       recording: row,

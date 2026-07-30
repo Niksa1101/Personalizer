@@ -5,6 +5,7 @@ import { cache } from "react"
 import {
   MERGE_LAYOUT_SET,
   SETTING_DEFAULTS,
+  SETTING_FIELDS,
   SETTING_KEYS,
   type MergeLayout,
   type SettingKey,
@@ -20,12 +21,23 @@ export type SettingOverrides<K extends SettingKey = SettingKey> = {
   lead?: SettingValues[K] | null
 }
 
+const BOOLEAN_SETTING_KEYS = new Set<SettingKey>(
+  SETTING_KEYS.filter((key) => SETTING_FIELDS[key].type === "boolean"),
+)
+
 // Range validation lives in lib/settings-schema.ts and runs on the write path only —
 // corrupt jsonb falls back silently on read.
 export function parseStoredSetting<K extends SettingKey>(
   key: K,
   raw: unknown,
 ): SettingValues[K] | undefined {
+  if (BOOLEAN_SETTING_KEYS.has(key)) {
+    if (typeof raw === "boolean") return raw as SettingValues[K]
+    if (raw === "true") return true as SettingValues[K]
+    if (raw === "false") return false as SettingValues[K]
+    return undefined
+  }
+
   switch (key) {
     case "recorder.viewport_width":
     case "recorder.viewport_height":
@@ -40,7 +52,8 @@ export function parseStoredSetting<K extends SettingKey>(
     case "encode.merge_timeout_ms":
     case "deploy.timeout_ms":
     case "queue.concurrency":
-    case "queue.auto_retry_limit": {
+    case "queue.auto_retry_limit":
+    case "cleanup.screenshot_retention_days": {
       const value = typeof raw === "number" ? raw : Number(raw)
       return Number.isFinite(value) ? (value as SettingValues[K]) : undefined
     }
@@ -48,12 +61,6 @@ export function parseStoredSetting<K extends SettingKey>(
       if (typeof raw === "string" && MERGE_LAYOUT_SET.has(raw as MergeLayout)) {
         return raw as SettingValues[K]
       }
-      return undefined
-    }
-    case "deploy.dry_run": {
-      if (typeof raw === "boolean") return raw as SettingValues[K]
-      if (raw === "true") return true as SettingValues[K]
-      if (raw === "false") return false as SettingValues[K]
       return undefined
     }
     default:

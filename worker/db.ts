@@ -1,7 +1,8 @@
 import type { Database } from "@/lib/database.types"
 import type { ManifestReconcileRow } from "@/lib/deploy-reconcile"
 import type { SampleLead } from "@/lib/landing-template"
-import { removeIfExists } from "@/lib/local-file"
+import type { DeleteOutcome } from "@/lib/local-file"
+import { deleteContainedRelPath } from "@/lib/local-file"
 import type {
   ErrorCode,
   EventKind,
@@ -162,6 +163,28 @@ export async function getUsableRecording(
   return data
 }
 
+/** Newest non-failed recording for precheck — includes purged rows. */
+export async function getLatestRecordingForPrecheck(
+  leadId: string,
+): Promise<UsableRecording | null> {
+  const { data, error } = await getSupabaseAdmin()
+    .from("recordings")
+    .select("id, local_path, purged_at, duration_ms")
+    .eq("lead_id", leadId)
+    .is("error_code", null)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle()
+
+  if (error) {
+    throw new Error(
+      `Failed to load recording for precheck: ${error.message}`,
+    )
+  }
+
+  return data
+}
+
 export async function insertRecording(input: {
   leadId: string
   localPath: string
@@ -263,6 +286,7 @@ export async function insertFailedRecording(input: {
   return data.id
 }
 
+/** Normalize-only: callers reach this when the file is already gone. */
 export async function purgeRecording(recordingId: string): Promise<string | null> {
   const { data: existing, error: readError } = await getSupabaseAdmin()
     .from("recordings")
@@ -289,6 +313,45 @@ export async function purgeRecording(recordingId: string): Promise<string | null
   }
 
   return existing.local_path
+}
+
+/** File-first purge: delete the recording file, then CAS-update the row. */
+export async function purgeRecordingAfterDelete(input: {
+  recordingId: string
+  localPath: string
+}): Promise<{ updated: boolean }> {
+  const now = new Date().toISOString()
+  const { data: updated, error } = await getSupabaseAdmin()
+    .from("recordings")
+    .update({ purged_at: now, local_path: null })
+    .eq("id", input.recordingId)
+    .eq("local_path", input.localPath)
+    .select("id")
+
+  if (error) {
+    throw new Error(`Failed to purge recording: ${error.message}`)
+  }
+
+  return { updated: (updated ?? []).length > 0 }
+}
+
+/** Delete one local web.mp4 and null its pointer. File-first (D4): a failed
+ *  unlink must leave web_path intact so tomorrow's sweep retries. */
+export async function deleteLocalWebCopy(input: {
+  webPath: string
+  campaignLeadIds: string[]
+}): Promise<{ outcome: DeleteOutcome }> {
+  const outcome = await deleteContainedRelPath(input.webPath)
+  if (!outcome.deleted && !outcome.absent) return { outcome }
+
+  const { error } = await getSupabaseAdmin()
+    .from("videos")
+    .update({ web_path: null })
+    .in("campaign_lead_id", input.campaignLeadIds)
+    .eq("web_path", input.webPath)
+
+  if (error) throw new Error(`Failed to null web_path: ${error.message}`)
+  return { outcome }
 }
 
 export async function linkRecordingToCampaignLead(
@@ -1257,21 +1320,10 @@ export async function cleanupLocalWebMp4(
   }
 
   const webPath = data.web_path
-  await removeIfExists(webPath)
-
-  const { data: updated, error: updateError } = await getSupabaseAdmin()
-    .from("videos")
-    .update({ web_path: null })
-    .eq("campaign_lead_id", campaignLeadId)
-    .select("id")
-    .maybeSingle()
-
-  assertVideoRowTouched(
-    updated,
-    updateError,
-    "null web_path after cleanup",
-    campaignLeadId,
-  )
+  await deleteLocalWebCopy({
+    webPath,
+    campaignLeadIds: [campaignLeadId],
+  })
 
   return { removed: true, path: webPath }
 }
