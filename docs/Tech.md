@@ -754,7 +754,13 @@ The distinction is the whole point: purging is our own scheduled behavior and sh
 
 ## 12. Export
 
-`GET /api/export?campaign={id}&status=ready` → CSV, UTF-8 with BOM (Excel opens it correctly).
+`GET /api/export?campaign={id}&status=ready` → CSV, UTF-8 with BOM (Excel opens it correctly). Params are **`campaign` and `status` only** — other leads-table filters do not apply. Default `status=ready`. The export button on `/leads` always sends `status=ready`.
+
+Implementation reads the flattened view `v_exportable_leads` (service-role only). Rows with `is_page_removed=true` are **excluded** from the file; the skipped count is returned in `X-Export-Skipped` and surfaced in the export toast. Response headers also carry `X-Export-Row-Count` (CSV data rows exported) and `X-Export-Missing-Video` (rows with a null `video_url` — exported with an empty cell, counted for the toast). Promotion eligibility uses the same view guard — the two paths cannot drift.
+
+CSV format: RFC 4180, **CRLF**, comma-separated, **every field quoted**, UTF-8 with BOM (once — via `TextEncoder`, not doubled). Formula-injection characters (`= + - @ TAB CR`) are prefixed with `'`. Quoting does **not** mitigate injection — Excel strips quotes before parsing; the two controls are independent. Known cost: phone numbers like `+1 555…` export as `'+1 555…`. Timestamps are ISO 8601 UTC with **seconds** precision and a `Z` suffix (reformatted from PostgREST microseconds). Null and empty cells render as `""`.
+
+Download is **`fetch` → blob** in the browser so response headers are readable and 401 becomes a toast, not a `.csv` file of JSON.
 
 | Column | Source |
 |---|---|
@@ -766,12 +772,16 @@ The distinction is the whole point: purging is our own scheduled behavior and sh
 | `campaign_ref` | `campaigns.ref` |
 | `landing_url` | `campaign_leads.netlify_url` |
 | `video_url` | `videos.web_public_url` |
-| `status` | `campaign_leads.status` |
+| `status` | `campaign_leads.status` (raw lowercase enum) |
 | `deployed_at`, `promoted_at` | ISO 8601 UTC |
+
+When `campaign` is omitted, **archived campaigns are excluded**. A named `campaign` exports regardless of archived state.
+
+Filename: `personalizer-{campaignRef|all}-{statusToken}-{YYYYMMDD-HHmm}.csv` (ASCII, **UTC**). Two statuses join with `+`; three or more → `multi`.
 
 Defaults to `status='ready'` — the handoff to outreach is reviewed leads only. Other statuses are exportable for inspection but that is not the primary path.
 
-> **Phase 15 export hazard (AC-2).** A `Ready` lead whose page was deliberately unpublished (`landing_pages.deploy_status='removed'`) still carries `campaign_leads.netlify_url` — unpublish does not clear it (DB.md §5.4). Phase 15's export query must exclude or flag those rows; exporting the stored URL verbatim will fail AC-2's "every landing_url loads a working page" check silently.
+> **Phase 15 export hazard (AC-2).** A `Ready` lead whose page was deliberately unpublished (`landing_pages.deploy_status='removed'`) still carries `campaign_leads.netlify_url` — unpublish does not clear it (`DB.md` §5.4). Export excludes those rows via `v_exportable_leads.is_page_removed`; exporting the stored URL verbatim would fail AC-2's "every landing_url loads a working page" check silently.
 
 ---
 

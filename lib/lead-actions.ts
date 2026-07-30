@@ -67,3 +67,36 @@ export function canRetry(
   }
   return RETRYABLE_STATUSES.includes(status)
 }
+
+export const PROMOTE_SKIP_REASONS = [
+  "not_found",
+  "not_deployed",
+  "no_live_url",
+  "page_unpublished",
+] as const
+
+export type PromoteSkipReason = (typeof PROMOTE_SKIP_REASONS)[number]
+
+export const PROMOTE_SKIP_COPY: Record<PromoteSkipReason, string> = {
+  not_found: "Lead not found",
+  not_deployed: "No longer deployed",
+  no_live_url: "No live landing URL",
+  page_unpublished: "Landing page unpublished",
+}
+
+export function canPromote(input: {
+  status: LeadStatus
+  netlifyUrl: string | null
+  pageDeployStatus: string | null
+}): { ok: true } | { ok: false; reason: PromoteSkipReason } {
+  if (input.status !== "deployed") {
+    return { ok: false, reason: "not_deployed" }
+  }
+  if (!input.netlifyUrl) {
+    return { ok: false, reason: "no_live_url" }
+  }
+  if (input.pageDeployStatus === "removed") {
+    return { ok: false, reason: "page_unpublished" }
+  }
+  return { ok: true }
+}

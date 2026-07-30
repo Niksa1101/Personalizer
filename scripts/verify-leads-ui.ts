@@ -15,7 +15,7 @@ import { existsSync, mkdirSync, rmSync } from "node:fs"
 import path from "node:path"
 
 import ffmpegPath from "ffmpeg-static"
-import { chromium, type Browser, type Page } from "playwright"
+import { type Browser, type Page } from "playwright"
 import { createClient } from "@supabase/supabase-js"
 
 import type { Database } from "../lib/database.types"
@@ -24,17 +24,17 @@ import { assertEnvOrExit } from "../lib/env-node"
 import { closeQueueConnections } from "../lib/queue"
 import { runProcess } from "../lib/video/spawn"
 import { pendingJobIds, removeJobsThisRunOrphaned } from "./queue-sweep"
-import { launchAuthenticatedPage } from "./fixtures/ui-harness"
-import { SESSION_COOKIE_NAME } from "../lib/session"
+import {
+  createUiHarness,
+  launchAuthenticatedPage,
+  loginSessionCookie,
+  printUiSummary,
+  probeServer,
+  UI_BASE_URL,
+} from "./fixtures/ui-harness"
 
-interface CheckResult {
-  name: string
-  state: "pass" | "fail" | "skip"
-  detail: string
-}
-
-const results: CheckResult[] = []
-const BASE_URL = "http://127.0.0.1:3000"
+const { results, pass, fail, skip } = createUiHarness()
+const BASE_URL = UI_BASE_URL
 
 const CHECKS = [
   "drawer opens without a new stream connection",
@@ -177,93 +177,11 @@ async function assertDrawerVideoPlayback(
   }
 }
 
-function pass(name: string, detail = "ok"): void {
-  results.push({ name, state: "pass", detail })
-  console.log(`PASS  ${name}${detail === "ok" ? "" : ` — ${detail}`}`)
-}
-
-function fail(name: string, detail: string): void {
-  results.push({ name, state: "fail", detail })
-  // Phase 13 finding 1: an early return inside try{} skipped the exit-code
-  // block and produced a false green. The exit code is set here instead.
-  process.exitCode = 1
-  console.error(`FAIL  ${name} — ${detail}`)
-}
-
-function skip(name: string, reason: string): void {
-  results.push({ name, state: "skip", detail: reason })
-  console.log(`SKIP  ${name} — ${reason}`)
-}
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
 function skipAll(reason: string): void {
   for (const name of CHECKS) skip(name, reason)
 }
-
-async function probeServer(): Promise<boolean> {
-  try {
-    const response = await fetch(`${BASE_URL}/login`, {
-      redirect: "manual",
-      signal: AbortSignal.timeout(3000),
-    })
-    return response.status >= 200 && response.status < 500
-  } catch {
-    return false
-  }
-}
-
-function getSetCookie(response: Response): string | null {
-  const headers = response.headers as Headers & {
-    getSetCookie?: () => string[]
-  }
-  if (typeof headers.getSetCookie === "function") {
-    const values = headers.getSetCookie()
-    return values.length > 0 ? values.join(", ") : null
-  }
-  return response.headers.get("set-cookie")
-}
-
-/**
- * Mints the session the same way `verify-dashboard.ts` does — POST /api/login,
- * keep the cookie. The browser is handed the cookie rather than the password:
- * the credential never reaches a form field or the page context.
- */
-async function loginSessionCookie(
-  password: string,
-): Promise<{ cookie: string } | { reason: string }> {
-  let response: Response
-  try {
-    response = await fetch(`${BASE_URL}/api/login`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ password }),
-      redirect: "manual",
-    })
-  } catch (error) {
-    return { reason: `POST /api/login threw: ${(error as Error).message}` }
-  }
-
-  if (!response.ok) {
-    const body = await response.text().catch(() => "")
-    return {
-      reason: `POST /api/login returned ${response.status}${
-        body ? ` — ${body.slice(0, 120)}` : ""
-      }`,
-    }
-  }
-
-  const setCookie = getSetCookie(response)
-  for (const part of (setCookie ?? "").split(/,(?=\s*[^;]+=)/)) {
-    const [pair] = part.split(";")
-    const eq = pair?.indexOf("=") ?? -1
-    if (eq <= 0) continue
-    if (pair.slice(0, eq).trim() === SESSION_COOKIE_NAME) {
-      return { cookie: pair.slice(eq + 1).trim() }
-    }
-  }
-  return { reason: `login 200 but no ${SESSION_COOKIE_NAME} cookie` }
-}
-
-const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
 /** Screenshot on failure — a red leg with no picture costs a whole re-run. */
 async function shoot(page: Page, label: string): Promise<void> {
@@ -288,14 +206,14 @@ async function main(): Promise<void> {
 
   if (!(await probeServer())) {
     skipAll("dev server not running")
-    summarize()
+    printUiSummary(results)
     return
   }
 
   const login = await loginSessionCookie(env.APP_PASSWORD)
   if ("reason" in login) {
     skipAll(login.reason)
-    summarize()
+    printUiSummary(results)
     return
   }
 
@@ -328,7 +246,7 @@ async function main(): Promise<void> {
 
     if (campaignError || !campaign) {
       skipAll(`could not seed campaign: ${campaignError?.message}`)
-      summarize()
+      printUiSummary(results)
       return
     }
     campaignId = campaign.id
@@ -462,7 +380,7 @@ async function main(): Promise<void> {
       !mediaLead
     ) {
       skipAll(`could not seed fixture leads — ${seedError}`)
-      summarize()
+      printUiSummary(results)
       return
     }
 
@@ -555,19 +473,10 @@ async function main(): Promise<void> {
       }
     }
 
-    browser = await chromium.launch()
-    const context = await browser.newContext({
-      viewport: { width: 1600, height: 1000 },
-    })
-    await context.addCookies([
-      {
-        name: SESSION_COOKIE_NAME,
-        value: login.cookie,
-        url: BASE_URL,
-      },
-    ])
-
-    const page = await context.newPage()
+    const launched = await launchAuthenticatedPage(login.cookie)
+    browser = launched.browser
+    const context = launched.context
+    const page = launched.page
 
     // Every request to the stream route, for the churn assertion.
     const streamRequests: string[] = []
@@ -1124,18 +1033,7 @@ async function main(): Promise<void> {
     await closeQueueConnections()
   }
 
-  summarize()
-}
-
-function summarize(): void {
-  const passed = results.filter((r) => r.state === "pass").length
-  const skipped = results.filter((r) => r.state === "skip").length
-  const asserted = results.length - skipped
-  console.log(
-    `\n${passed}/${asserted} checks passed${
-      skipped > 0 ? `, ${skipped} skipped` : ""
-    }`,
-  )
+  printUiSummary(results)
 }
 
 main()

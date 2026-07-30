@@ -27,3 +27,17 @@ export function getSupabaseAdmin(): SupabaseAdmin {
 
   return client
 }
+
+/**
+ * The filter methods our query helpers apply. `PostgrestFilterBuilder` takes
+ * eight type parameters and differs between a `head: true` count query and a
+ * paged read, so helpers take the builder generically and cast to this shape
+ * internally — deriving it with `ReturnType<…["from"]>` silently resolves to
+ * `PostgrestQueryBuilder`, which has none of these methods.
+ */
+export type PostgrestFilterable = {
+  eq(column: string, value: unknown): PostgrestFilterable
+  in(column: string, values: readonly unknown[]): PostgrestFilterable
+  is(column: string, value: null): PostgrestFilterable
+  or(filters: string, options?: { referencedTable?: string }): PostgrestFilterable
+}

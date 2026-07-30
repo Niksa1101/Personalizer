@@ -146,6 +146,13 @@ export function leadsPageHref(
   return query ? `/leads?${query}` : "/leads"
 }
 
+/** Export href for the leads toolbar — campaign scope only, always status=ready. */
+export function buildExportHref(campaignId?: string): string {
+  const params = new URLSearchParams({ status: "ready" })
+  if (campaignId) params.set("campaign", campaignId)
+  return `/api/export?${params.toString()}`
+}
+
 export type LeadStreamScope = {
   campaignId: string | null
   includeArchived: boolean

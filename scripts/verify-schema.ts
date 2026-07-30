@@ -61,6 +61,11 @@ const REF_SPECS: RefSpec[] = [
   { label: "lead", fn: "next_lead_ref", prefix: "LD-", padWidth: 4 },
 ]
 
+const RPC_DENY_SPECS = [
+  { label: "promote_campaign_leads", fn: "promote_campaign_leads" as const, args: { p_ids: [] as string[], p_trigger: "bulk" } },
+  { label: "unpromote_campaign_lead", fn: "unpromote_campaign_lead" as const, args: { p_campaign_lead_id: "00000000-0000-4000-8000-000000000000" } },
+] as const
+
 async function main(): Promise<void> {
   const env = assertEnvOrExit()
   const supabase = createClient<Database>(
@@ -153,6 +158,36 @@ async function main(): Promise<void> {
         "set NEXT_PUBLIC_SUPABASE_ANON_KEY to assert",
       )
     }
+  }
+
+  for (const spec of RPC_DENY_SPECS) {
+    if (anon) {
+      const { error } = await anon.rpc(spec.fn, spec.args as never)
+      if (error) {
+        pass(`${spec.label} not executable by anon`)
+      } else {
+        fail(
+          `${spec.label} not executable by anon`,
+          "RPC succeeded — see DB.md §7.1.2",
+        )
+      }
+    } else {
+      skip(`${spec.label} not executable by anon`, "set NEXT_PUBLIC_SUPABASE_ANON_KEY to assert")
+    }
+  }
+
+  if (anon) {
+    const { error } = await anon.from("v_exportable_leads").select("id").limit(1)
+    if (error) {
+      pass("v_exportable_leads not readable by anon")
+    } else {
+      fail(
+        "v_exportable_leads not readable by anon",
+        "SELECT succeeded — see DB.md §7.1.2",
+      )
+    }
+  } else {
+    skip("v_exportable_leads not readable by anon", "set NEXT_PUBLIC_SUPABASE_ANON_KEY to assert")
   }
 
   const passed = results.filter((r) => r.state === "pass").length

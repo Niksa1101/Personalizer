@@ -4,7 +4,11 @@ import { revalidatePath } from "next/cache"
 import { z } from "zod"
 
 import { verifySession } from "@/lib/dal"
-import { canRetry } from "@/lib/lead-actions"
+import {
+  canRetry,
+  PROMOTE_SKIP_COPY,
+  type PromoteSkipReason,
+} from "@/lib/lead-actions"
 import { leadEditSchema } from "@/lib/lead-edit"
 import type { LeadFilters } from "@/lib/lead-filters"
 import {
@@ -12,8 +16,10 @@ import {
   deriveRequeueModeForLead,
   getLeadDetail,
   LeadMutationError,
+  promoteLeads,
   refetchLeadRows,
   requeueLead,
+  unpromoteLead,
   unpublishLead,
   updateLead,
   type LeadDetail,
@@ -296,4 +302,105 @@ export async function bulkDeleteAction(
 
   revalidatePath("/leads")
   return { outcomes }
+}
+
+const PROMOTE_CAP = 200
+
+function mapPromoteReason(reason: string | null | undefined): string | undefined {
+  if (!reason) return undefined
+  if (reason in PROMOTE_SKIP_COPY) {
+    return PROMOTE_SKIP_COPY[reason as PromoteSkipReason]
+  }
+  return reason
+}
+
+export async function bulkPromoteAction(
+  ids: string[],
+): Promise<BulkActionResult> {
+  await verifySession()
+
+  const unique = [...new Set(ids)]
+  if (unique.length > PROMOTE_CAP) {
+    return {
+      outcomes: unique.map((id) => ({
+        id,
+        ref: id,
+        outcome: "skipped" as const,
+        reason: `Select ${PROMOTE_CAP} leads or fewer to promote at once`,
+      })),
+    }
+  }
+
+  try {
+    const rows = await promoteLeads(unique, "bulk")
+    const outcomes: BulkLeadOutcome[] = rows.map((row) => ({
+      id: row.campaign_lead_id,
+      ref: row.lead_ref || row.campaign_lead_id,
+      outcome:
+        row.outcome === "success"
+          ? "success"
+          : row.outcome === "skipped"
+            ? "skipped"
+            : "failed",
+      reason: mapPromoteReason(row.reason),
+    }))
+    revalidatePath("/leads")
+    return { outcomes }
+  } catch (error) {
+    if (error instanceof Error && error.message.includes("23514")) {
+      return {
+        outcomes: unique.map((id) => ({
+          id,
+          ref: id,
+          outcome: "skipped",
+          reason: "Constraint prevented promotion",
+        })),
+      }
+    }
+    throw error
+  }
+}
+
+export async function promoteLeadAction(
+  campaignLeadId: string,
+): Promise<LeadActionState> {
+  await verifySession()
+
+  try {
+    const rows = await promoteLeads([campaignLeadId], "drawer")
+    const row = rows[0]
+    if (!row || row.outcome !== "success") {
+      return actionError(
+        mapPromoteReason(row?.reason ?? null) ?? "Lead could not be promoted",
+      )
+    }
+    revalidatePath("/leads")
+    return {}
+  } catch (error) {
+    if (error instanceof Error && error.message.includes("23514")) {
+      return actionError("Lead could not be promoted — URL constraint")
+    }
+    return actionError(
+      error instanceof Error ? error.message : "Failed to promote lead",
+    )
+  }
+}
+
+export async function unpromoteLeadAction(
+  campaignLeadId: string,
+): Promise<LeadActionState> {
+  await verifySession()
+
+  try {
+    await unpromoteLead(campaignLeadId)
+    revalidatePath("/leads")
+    return {}
+  } catch (error) {
+    const message = error instanceof Error ? error.message : ""
+    return actionError(
+      message.includes("is not ready")
+        ? "This lead is no longer Ready — refresh and try again"
+        : "Failed to return lead to Deployed",
+    )
+  }
 }

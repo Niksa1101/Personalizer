@@ -31,6 +31,8 @@
     "verify:logs": "tsx --conditions react-server --env-file-if-exists=.env.local scripts/verify-logs.ts",
     "verify:logs-ui": "tsx --conditions react-server --env-file-if-exists=.env.local scripts/verify-logs-ui.ts",
     "verify:schema": "tsx --env-file-if-exists=.env.local scripts/verify-schema.ts",
+    "verify:export": "tsx --conditions react-server --env-file-if-exists=.env.local scripts/verify-export.ts",
+    "verify:export-ui": "tsx --conditions react-server --env-file-if-exists=.env.local scripts/verify-export-ui.ts",
     "check:urls": "tsx scripts/check-urls.ts",
     "setup:browser": "playwright install chromium",
     "redis:up": "docker start pz-redis || docker run -d --name pz-redis --restart unless-stopped -p 6379:6379 redis:7-alpine",

@@ -13,7 +13,7 @@ import type { PipelineEventMeta } from "@/lib/pipeline-types"
 import { requestSiteSync } from "@/lib/site-sync"
 import { resolveMany } from "@/lib/settings"
 import { storageAbs } from "@/lib/storage"
-import { getSupabaseAdmin } from "@/lib/supabase"
+import { getSupabaseAdmin, type PostgrestFilterable } from "@/lib/supabase"
 import { normalizeWebsiteUrl } from "@/lib/website-url"
 import type { Database } from "@/lib/database.types"
 
@@ -129,11 +129,8 @@ export class LeadMutationError extends Error {
   }
 }
 
-function applyLeadFilters(
-  query: ReturnType<ReturnType<typeof getSupabaseAdmin>["from"]>,
-  filters: LeadFilters,
-) {
-  let q = query
+function applyLeadFilters<T extends object>(query: T, filters: LeadFilters): T {
+  let q = query as unknown as PostgrestFilterable
 
   if (filters.campaignId) {
     q = q.eq("campaign_id", filters.campaignId)
@@ -161,7 +158,7 @@ function applyLeadFilters(
     })
   }
 
-  return q
+  return q as unknown as T
 }
 
 function sortConfig(
@@ -608,6 +605,32 @@ export async function unpublishLead(campaignLeadId: string): Promise<void> {
   })
   if (error) throw new Error(`Failed to unpublish: ${error.message}`)
   await requestSiteSync({ reason: "lead_unpublish", campaignLeadId })
+}
+
+export type PromoteOutcomeRow = {
+  campaign_lead_id: string
+  lead_ref: string
+  outcome: string
+  reason: string | null
+}
+
+export async function promoteLeads(
+  ids: string[],
+  trigger: "bulk" | "drawer" = "bulk",
+): Promise<PromoteOutcomeRow[]> {
+  const { data, error } = await getSupabaseAdmin().rpc("promote_campaign_leads", {
+    p_ids: ids,
+    p_trigger: trigger,
+  })
+  if (error) throw new Error(`Failed to promote: ${error.message}`)
+  return data ?? []
+}
+
+export async function unpromoteLead(campaignLeadId: string): Promise<void> {
+  const { error } = await getSupabaseAdmin().rpc("unpromote_campaign_lead", {
+    p_campaign_lead_id: campaignLeadId,
+  })
+  if (error) throw new Error(`Failed to unpromote: ${error.message}`)
 }
 
 export async function deleteLead(
