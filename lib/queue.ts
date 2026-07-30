@@ -7,7 +7,11 @@ import { assertEnv } from "@/lib/env"
 
 export const PIPELINE_QUEUE_NAME = "pipeline"
 export const SITE_SYNC_QUEUE_NAME = "site-sync"
+export const CLEANUP_QUEUE_NAME = "cleanup"
 export const SITE_SYNC_JOB_ID = "site-sync"
+
+export type CleanupTrigger = "scheduled" | "manual" | "catchup"
+export type CleanupJobData = { trigger: CleanupTrigger }
 
 const LIVENESS_PREFIX = "pz:worker:alive:"
 const LIVENESS_TTL_SECONDS = 15
@@ -31,6 +35,7 @@ export type WorkerBeat = WorkerBeatPayload & {
 let redis: Redis | null = null
 let queue: Queue | null = null
 let siteSyncQueue: Queue | null = null
+let cleanupQueue: Queue | null = null
 
 export function getRedis(): Redis {
   if (redis) return redis
@@ -79,6 +84,16 @@ export function getSiteSyncQueue(): Queue {
   return siteSyncQueue
 }
 
+export function getCleanupQueue(): Queue {
+  if (cleanupQueue) return cleanupQueue
+
+  cleanupQueue = new Queue(CLEANUP_QUEUE_NAME, {
+    connection: getRedis(),
+  })
+
+  return cleanupQueue
+}
+
 async function ensureQueueReady(): Promise<Queue> {
   await ensureRedisConnected()
   return getQueue()
@@ -87,6 +102,11 @@ async function ensureQueueReady(): Promise<Queue> {
 async function ensureSiteSyncQueueReady(): Promise<Queue> {
   await ensureRedisConnected()
   return getSiteSyncQueue()
+}
+
+async function ensureCleanupQueueReady(): Promise<Queue> {
+  await ensureRedisConnected()
+  return getCleanupQueue()
 }
 
 function deployDirtyKey(siteId?: string): string {
@@ -249,6 +269,23 @@ export async function enqueueSiteSync(opts?: {
   )
 }
 
+export async function enqueueCleanup(
+  jobId: string,
+  trigger: CleanupTrigger,
+): Promise<void> {
+  await ensureRedisConnected()
+  await (await ensureCleanupQueueReady()).add(
+    "cleanup",
+    { trigger } satisfies CleanupJobData,
+    {
+      jobId,
+      attempts: 1,
+      removeOnComplete: 10,
+      removeOnFail: false,
+    },
+  )
+}
+
 function livenessKey(workerId: string): string {
   return `${LIVENESS_PREFIX}${workerId}`
 }
@@ -394,6 +431,10 @@ export async function closeQueueConnections(): Promise<void> {
   if (siteSyncQueue) {
     await siteSyncQueue.close()
     siteSyncQueue = null
+  }
+  if (cleanupQueue) {
+    await cleanupQueue.close()
+    cleanupQueue = null
   }
   if (redis) {
     await redis.quit()

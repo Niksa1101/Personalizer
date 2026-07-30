@@ -997,9 +997,21 @@ Verified by `npm run typecheck` (**0 errors**), `npm run lint` (0 errors; 1 pre-
 
 #### Phase 16 — Retention and cleanup
 
-The daily repeatable job (`Tech.md` §7.5): 30-day recording purge, intermediate deletion after deploy, screenshot pruning that spares failed leads.
+The daily repeatable job (`Tech.md` §7.5): 30-day recording purge, inline + sweep-2 `web.mp4` deletion after deploy, screenshot pruning that spares failed leads.
 
-**Exit:** a recording older than the retention window is purged and its row updated. A step needing a purged recording re-records silently and writes a `note` event. A *missing but not purged* file fails with `missing_asset` instead.
+**Exit:**
+
+| Criterion | Verified by |
+|---|---|
+| A recording older than the retention window is purged and its row updated | `verify:cleanup` — `purge deletes the file and sets purged_at` |
+| A step needing a purged recording re-records silently and writes a `note` event | `verify:record` — `record step writes the purged re-record note event` |
+| A *missing but not purged* file fails with `missing_asset` instead | `verify:record` — `precheck classifies a missing-but-not-purged row as missing_asset`; `record step fails missing-but-not-purged with missing_asset` |
+| Purged-vs-missing classification is consistent across scripts | **Both** `verify:cleanup` and `verify:record` must be green (D22) — inverting the `purged_at` check must redden legs in both |
+| Inline deploy cleanup resolves against `LOCAL_STORAGE_ROOT` | `verify:deploy` — `inline web.mp4 cleanup removes file from LOCAL_STORAGE_ROOT` |
+| Redeploy after page regeneration removes local `web.mp4` | `verify:deploy` — `redeploy removes regenerated web.mp4` (`wasLiveBefore` guard removed) |
+| Drawer copy for purged / missing / gone screenshots | `verify:leads-ui` — three Phase 16 drawer legs |
+
+**Verified (2026-07-30):** `npm run typecheck` ✅, `npm run lint` ✅ (1 pre-existing React Compiler warning in `leads-table.tsx`), `npm test` ✅ **371/371**, `npm run verify:record` **14/14**, `npm run verify:cleanup` **20/20** (with `npm run redis:up`), `npm run verify:deploy` **17/17**, `npm run verify:leads-ui` **14/14** (dev server + Chrome; three Phase 16 drawer legs browser-verified). Purged re-record note event, missing-asset gate, screenshot path union, `bytesFreed` accumulation, lock-skip summary, cleanup trigger propagation, and drawer UX (dynamic retention copy, no Re-record in Recording section when purged) all covered.
 
 ---
 

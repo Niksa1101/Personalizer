@@ -31,6 +31,7 @@
     "verify:logs": "tsx --conditions react-server --env-file-if-exists=.env.local scripts/verify-logs.ts",
     "verify:logs-ui": "tsx --conditions react-server --env-file-if-exists=.env.local scripts/verify-logs-ui.ts",
     "verify:schema": "tsx --env-file-if-exists=.env.local scripts/verify-schema.ts",
+    "verify:cleanup": "tsx --conditions react-server --env-file-if-exists=.env.local scripts/verify-cleanup.ts",
     "verify:export": "tsx --conditions react-server --env-file-if-exists=.env.local scripts/verify-export.ts",
     "verify:export-ui": "tsx --conditions react-server --env-file-if-exists=.env.local scripts/verify-export-ui.ts",
     "check:urls": "tsx scripts/check-urls.ts",

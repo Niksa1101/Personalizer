@@ -57,18 +57,16 @@ export async function evaluateRecordingPrecheck(
 
   const { id, local_path, purged_at } = input.recording
 
+  if (purged_at != null) {
+    return { action: "record_purged", recordingId: id }
+  }
+
   if (local_path == null) {
-    if (purged_at != null) {
-      return { action: "record_purged", recordingId: id }
-    }
     return { action: "missing_asset" }
   }
 
   const { exists } = await statFile(local_path)
   if (!exists) {
-    if (purged_at != null) {
-      return { action: "record_purged", recordingId: id }
-    }
     return { action: "missing_asset" }
   }
 

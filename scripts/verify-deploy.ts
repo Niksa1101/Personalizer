@@ -1,14 +1,26 @@
 /**
  * Phase 11 deploy verification — hermetic fake Netlify leg (default) plus an
  * optional scratch-site real leg (`DEPLOY_REAL=1`).
+ *
+ * Phase 16 additions: inline web.mp4 cleanup resolves against LOCAL_STORAGE_ROOT
+ * (the pre-Phase-16 bug deleted relative to process CWD). The deploy step's
+ * `wasLiveBefore` guard was removed — `cleanupLocalWebMp4` now runs after every
+ * successful deploy so a redeploy that regenerated web.mp4 does not leak the
+ * local copy; the daily sweep is the backstop when the worker dies mid-deploy.
  */
+
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { tmpdir } from "node:os"
+import path from "node:path"
 
 import { notFoundHtml } from "@/lib/not-found-page"
 import { assertEnvOrExit } from "@/lib/env-node"
 import { getRedis, manifestCacheKey } from "@/lib/queue"
 import { robotsTxtBody } from "@/lib/robots-txt"
+import { storageAbs } from "@/lib/storage"
 import { startNetlifyFake } from "@/scripts/fixtures/netlify-fake"
 import { acquireDeployLock } from "@/worker/deploy/lock"
+import { deleteLocalWebCopy } from "@/worker/db"
 import {
   buildManifest,
   detectMassRemoval,
@@ -222,6 +234,88 @@ async function deployManifest(
   })
 }
 
+async function runInlineWebMp4CleanupLeg(): Promise<void> {
+  const tempRoot = mkdtempSync(path.join(tmpdir(), "pz-deploy-web-"))
+  const previousRoot = process.env.LOCAL_STORAGE_ROOT
+  process.env.LOCAL_STORAGE_ROOT = tempRoot
+
+  try {
+    const webPath = "batch/verify-deploy/web.mp4"
+    const absPath = storageAbs(webPath)
+    mkdirSync(path.dirname(absPath), { recursive: true })
+    writeFileSync(absPath, "fake-web-mp4")
+
+    let copy: Awaited<ReturnType<typeof deleteLocalWebCopy>>
+    try {
+      copy = await deleteLocalWebCopy({
+        webPath,
+        campaignLeadIds: ["00000000-0000-0000-0000-000000000000"],
+      })
+    } catch (error) {
+      // File-first: a Supabase outage must not hide a broken storageAbs path.
+      if (!existsSync(absPath)) {
+        pass(
+          "inline web.mp4 cleanup removes file from LOCAL_STORAGE_ROOT",
+          "file deleted before Supabase step failed",
+        )
+        return
+      }
+      fail(
+        "inline web.mp4 cleanup removes file from LOCAL_STORAGE_ROOT",
+        error instanceof Error ? error.message : String(error),
+      )
+      return
+    }
+
+    if (copy.outcome.deleted && !existsSync(absPath)) {
+      pass("inline web.mp4 cleanup removes file from LOCAL_STORAGE_ROOT")
+    } else {
+      fail(
+        "inline web.mp4 cleanup removes file from LOCAL_STORAGE_ROOT",
+        `deleted=${copy.outcome.deleted} stillExists=${existsSync(absPath)}`,
+      )
+    }
+  } catch (error) {
+    fail(
+      "inline web.mp4 cleanup removes file from LOCAL_STORAGE_ROOT",
+      error instanceof Error ? error.message : String(error),
+    )
+  } finally {
+    if (previousRoot === undefined) {
+      delete process.env.LOCAL_STORAGE_ROOT
+    } else {
+      process.env.LOCAL_STORAGE_ROOT = previousRoot
+    }
+    rmSync(tempRoot, { recursive: true, force: true })
+  }
+}
+
+function assertRedeployWebMp4Cleanup(): void {
+  const deploySource = readFileSync(
+    path.join(process.cwd(), "worker", "steps", "deploy.ts"),
+    "utf8",
+  )
+  const hasGuard = /\bwasLiveBefore\b/.test(deploySource)
+  const callsCleanup = deploySource.includes("cleanupLocalWebMp4(campaignLeadId)")
+
+  if (hasGuard) {
+    fail(
+      "redeploy removes regenerated web.mp4",
+      "wasLiveBefore guard is still present — redeploy would skip inline cleanup",
+    )
+  } else if (!callsCleanup) {
+    fail(
+      "redeploy removes regenerated web.mp4",
+      "deploy step no longer calls cleanupLocalWebMp4 after a successful deploy",
+    )
+  } else {
+    pass(
+      "redeploy removes regenerated web.mp4",
+      "wasLiveBefore guard removed — cleanupLocalWebMp4 runs on every successful deploy",
+    )
+  }
+}
+
 async function runHermeticLeg(): Promise<void> {
   console.log("\n=== Hermetic leg (fake Netlify) ===\n")
 
@@ -229,6 +323,9 @@ async function runHermeticLeg(): Promise<void> {
   if (!assertHermeticLoopbackGuard()) {
     return
   }
+
+  await runInlineWebMp4CleanupLeg()
+  assertRedeployWebMp4Cleanup()
 
   const fake = await startNetlifyFake({ siteId: "verify-deploy-fake" })
   setupHermeticEnv(fake.siteId)

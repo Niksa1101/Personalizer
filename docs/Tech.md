@@ -455,11 +455,19 @@ Partial files from a killed step are overwritten by the re-run — steps write t
 
 ### 7.5 Cleanup jobs
 
-A repeatable BullMQ job, daily:
+A repeatable BullMQ job on the dedicated `cleanup` queue, scheduled daily at 03:00 **local** time (`upsertJobScheduler`, cron `0 3 * * *`). Boot enqueues a catch-up run when `lastSuccessAt` is older than 24 h; both the scheduler fire and the catch-up gate on the same Redis blob so a worker returning at 03:05 does not run twice. The scheduler stays armed unconditionally; `cleanup.enabled` is read at run time (5 s settings TTL), so toggling needs no restart. Job data carries a `trigger` (`scheduled` | `catchup` | `manual`) for log attribution; a single Redis lock (`pz:cleanup:lock`) excludes concurrent runs — `acquireRedisLock` with `waitMs: 0` must still attempt one `SET NX`.
 
-- Purge recordings older than `settings.recorder.retention_days` (30): delete the file, set `recordings.purged_at`, null `local_path`.
-- Delete `videos.web_path` local copies where `uploaded_at IS NOT NULL` and the deploy succeeded.
-- Prune debug screenshots older than 30 days for leads not in `failed`.
+Three sweeps, plus temp-dir cleanup in the same job:
+
+**Sweep 1 — raw recordings (row-driven).** Select rows on `recordings_purge_idx`: `purged_at IS NULL`, `local_path IS NOT NULL`, `recorded_at` older than `settings.recorder.retention_days` (30). **File-first, then CAS:** `deleteContainedRelPath(local_path)`; only on `deleted || absent` update `purged_at` and null `local_path`, with `.eq("local_path", row.local_path)` so a revived row is skipped. Skip leads in `campaign_leads.status IN ('queued','processing')`. Cap 500 rows, oldest `recorded_at` first. The `local_path IS NOT NULL` filter structurally excludes failed-capture rows (`error_code` set, no file).
+
+**Sweep 2 — local `web.mp4` copies (backstop).** The deploy step deletes inline after every successful deploy (`cleanupLocalWebMp4` — the pre-Phase-16 path was broken and never removed files; see `verify:deploy`). This sweep catches copies left when the worker dies mid-deploy. Predicate: `videos.web_path`, `uploaded_at`, and `web_public_url` all non-null **and** the lead's `landing_pages.deployed_at` non-null (dry-run leads are spared for free). Group by exact `web_path`; delete only when **every** sharing row is deploy-eligible and unbusy, then null `web_path` on all of them via `deleteLocalWebCopy`. Warn when a group has >1 row.
+
+**Sweep 3 — debug screenshots (lead-driven).** Failed captures insert rows with screenshot paths but no `local_path`, so a row-driven sweep cannot visit them safely — paths are deterministic per `(batch folder, lead-slug)` and last-writer-wins across rows. Instead: accumulate distinct `lead_id`s from rows older than `settings.cleanup.screenshot_retention_days` (30), fetch **all** rows per lead, take the newest by `(created_at DESC, id DESC)` as the age test, collect the union of stored screenshot columns, skip if any `campaign_lead` of the lead is `failed` or the lead is busy, delete each file independently and null only the column whose file is confirmed gone. Cap distinct leads, not rows.
+
+**Temps.** After the three sweeps: `sweepStaleMergeTemps` with `DAILY_TEMP_PATTERN` (includes recorder transcode temps) on touched lead dirs; `sweepStaleRecorderTemps`, intro-upload, and import-upload temps under `tmp/` at their existing age defaults — app-produced, not lead-scoped, no busy guard.
+
+Errors are collected per item; the job completes `ok: true` with an error count unless a query fails. EBUSY on Windows (drawer holds a file open) is expected — retry tomorrow. Settings: `cleanup.enabled`, `cleanup.dry_run`, `cleanup.screenshot_retention_days` (`DB.md` §5.12). Verified by `npm run verify:cleanup`; purged-vs-missing classification additionally requires `npm run verify:record` (D22).
 
 ### 7.6 Alternative: a Supabase job table
 
@@ -735,7 +743,7 @@ Redirects are **not** followed, with one exception: Netlify serves `/a/b/index.h
 | Poster (local) | Local `{batch}/{lead-slug}/poster.jpg` | Indefinite — admin thumbnail |
 | Poster (remote) | Supabase `lead-videos/{uuid}/poster.jpg` | Indefinite — `cacheControl: 31536000` (unique-per-encode, same as video) |
 | Intro (normalized) | Local `intros/{id}.mp4` | Indefinite |
-| Debug screenshots | Local `{batch}/{lead-slug}/*.png` | 30 days, kept for `failed` |
+| Debug screenshots | Local `{batch}/{lead-slug}/*.png` | 30 days (`cleanup.screenshot_retention_days`), kept for `failed`; lead-driven sweep (§7.5). Drawer: purged recording → "Raw recording purged after 30 days."; missing/unplayable → "Recording file is missing or unplayable." with Re-record; screenshot tiles drop on `onError` when the file is gone |
 | Landing HTML | PostgreSQL `landing_pages.html` | Indefinite |
 
 All local paths are stored **relative to `LOCAL_STORAGE_ROOT`** (`DB.md` §3), so moving the storage root is an env change rather than a migration.

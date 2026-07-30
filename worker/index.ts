@@ -14,10 +14,13 @@ import { sweepStaleRecorderTemps } from "../lib/local-file"
 import {
   closeQueueConnections,
   deleteLiveness,
+  enqueueCleanup,
   enqueueLead,
   enqueueSiteSync,
   getRedis,
+  type CleanupJobData,
   isDeployDirty,
+  CLEANUP_QUEUE_NAME,
   PIPELINE_QUEUE_NAME,
   registerLiveness,
   setSiteSyncLastResult,
@@ -37,6 +40,12 @@ const SITE_SYNC_RETRY_DELAY_MS = 60_000
 import { processLeadJob } from "./pipeline"
 import { runBootRecovery, startPeriodicReconcile } from "./recovery"
 import { closeSharedBrowser } from "./recorder/browser"
+import {
+  armCleanupScheduler,
+  isCleanupDue,
+  runCleanupJob,
+} from "./cleanup/job"
+import { getCleanupLastRun } from "@/lib/cleanup-state"
 
 const SHUTDOWN_DRAIN_MS = 30_000
 
@@ -62,6 +71,18 @@ async function main(): Promise<void> {
 
   await runBootRecovery()
   await sweepStaleRecorderTemps(storageAbs("tmp"))
+
+  await armCleanupScheduler().catch((error) => {
+    console.error("[worker] cleanup scheduler arm failed:", error)
+  })
+
+  if (await isCleanupDue(await getCleanupLastRun(), new Date())) {
+    await enqueueCleanup(`cleanup-catchup-${Date.now()}`, "catchup").catch(
+      (error) => {
+        console.error("[worker] cleanup catch-up enqueue failed:", error)
+      },
+    )
+  }
 
   const settings = await resolveMany(["queue.concurrency"])
   currentConcurrency = settings["queue.concurrency"]
@@ -162,6 +183,23 @@ async function main(): Promise<void> {
     })()
   })
 
+  const cleanupWorker = new Worker<CleanupJobData>(
+    CLEANUP_QUEUE_NAME,
+    async (job) =>
+      runCleanupJob({ trigger: job.data.trigger ?? "scheduled" }),
+    {
+      connection: getRedis(),
+      concurrency: 1,
+    },
+  )
+
+  cleanupWorker.on("failed", (job, error) => {
+    console.error(
+      `[worker] cleanup job ${job?.id ?? "?"} failed:`,
+      error,
+    )
+  })
+
   const stopPeriodicReconcile = startPeriodicReconcile({
     onAfterTick: async () => {
       const nextSettings = await resolveMany(["queue.concurrency"])
@@ -186,6 +224,7 @@ async function main(): Promise<void> {
     const drainPromise = Promise.all([
       bullWorker.close(),
       siteSyncWorker.close(),
+      cleanupWorker.close(),
     ])
     const timeout = new Promise<void>((_, reject) => {
       setTimeout(

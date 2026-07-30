@@ -2,9 +2,9 @@ import { unauthorizedResponse, verifySession } from "@/lib/dal"
 import {
   contentTypeFromExtension,
   loadCampaignLeadMediaContext,
-  resolveContainedLocalPath,
 } from "@/lib/lead-media"
 import { serveLocalFile } from "@/lib/local-file"
+import { resolveContainedLocalPath } from "@/lib/storage"
 
 export const runtime = "nodejs"
 

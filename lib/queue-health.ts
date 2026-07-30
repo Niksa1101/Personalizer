@@ -76,6 +76,7 @@ function getHealthRedis(url: string): Redis {
       maxRetriesPerRequest: 1,
       lazyConnect: true,
     })
+    client.on("error", () => {})
     healthRedisByUrl.set(url, client)
   }
   return client

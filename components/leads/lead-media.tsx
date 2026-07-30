@@ -1,5 +1,7 @@
 "use client"
 
+import { useState } from "react"
+
 import { PacingIndicator } from "@/components/leads/pacing-indicator"
 import { RetryStepButton } from "@/components/leads/retry-step-button"
 import type { LeadDetail } from "@/lib/leads"
@@ -12,10 +14,20 @@ type LeadMediaProps = {
 }
 
 export function LeadMedia({ detail, campaignLeadId, status }: LeadMediaProps) {
+  const [recordingFailed, setRecordingFailed] = useState(false)
+  const [beforeFailed, setBeforeFailed] = useState(false)
+  const [afterFailed, setAfterFailed] = useState(false)
+
   const recordingAvailable =
     detail.recording &&
     !detail.recording.purged_at &&
-    detail.recording.local_path
+    detail.recording.local_path &&
+    !recordingFailed
+
+  const showBefore =
+    detail.recording?.screenshot_before_path && !beforeFailed
+  const showAfter =
+    detail.recording?.screenshot_after_path && !afterFailed
 
   return (
     <section className="space-y-4">
@@ -28,25 +40,29 @@ export function LeadMedia({ detail, campaignLeadId, status }: LeadMediaProps) {
             preload="metadata"
             className="aspect-video w-full rounded-md border bg-black"
             src={`/api/leads/${campaignLeadId}/recording`}
+            onError={() => setRecordingFailed(true)}
           />
         ) : (
           <div className="space-y-2 text-sm text-muted-foreground">
             <p>
               {detail.recording?.purged_at
-                ? "Recording was purged or is missing."
-                : "No recording yet."}
+                ? `Raw recording purged after ${detail.recordingRetentionDays} days.`
+                : recordingFailed
+                  ? "Recording file is missing or unplayable."
+                  : "No recording yet."}
             </p>
-            <RetryStepButton
-              campaignLeadId={campaignLeadId}
-              step="recording"
-              disabled={status === "processing"}
-            />
+            {!detail.recording?.purged_at ? (
+              <RetryStepButton
+                campaignLeadId={campaignLeadId}
+                step="recording"
+                disabled={status === "processing"}
+              />
+            ) : null}
           </div>
         )}
-        {detail.recording?.screenshot_before_path ||
-        detail.recording?.screenshot_after_path ? (
+        {showBefore || showAfter ? (
           <div className="grid grid-cols-2 gap-2">
-            {detail.recording.screenshot_before_path ? (
+            {showBefore ? (
               <a
                 href={`/api/leads/${campaignLeadId}/screenshot?which=before`}
                 target="_blank"
@@ -57,10 +73,11 @@ export function LeadMedia({ detail, campaignLeadId, status }: LeadMediaProps) {
                   src={`/api/leads/${campaignLeadId}/screenshot?which=before`}
                   alt="Before scroll"
                   className="rounded-md border"
+                  onError={() => setBeforeFailed(true)}
                 />
               </a>
             ) : null}
-            {detail.recording?.screenshot_after_path ? (
+            {showAfter ? (
               <a
                 href={`/api/leads/${campaignLeadId}/screenshot?which=after`}
                 target="_blank"
@@ -71,6 +88,7 @@ export function LeadMedia({ detail, campaignLeadId, status }: LeadMediaProps) {
                   src={`/api/leads/${campaignLeadId}/screenshot?which=after`}
                   alt="After scroll"
                   className="rounded-md border"
+                  onError={() => setAfterFailed(true)}
                 />
               </a>
             ) : null}

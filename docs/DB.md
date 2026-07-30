@@ -707,10 +707,13 @@ Seeded keys:
 | `queue.auto_retry_limit` | `2` | Then `failed`. |
 | `deploy.dry_run` | `false` | Skips Netlify entirely; everything else runs. |
 | `deploy.timeout_ms` | `300000` | Whole-deploy budget (lock wait + upload + poll). Added in Phase 11 by `20260726130200_deploy_timeout_setting.sql`. |
+| `cleanup.enabled` | `true` | Run the daily retention sweep. Added in Phase 16 by `20260730120000_cleanup_settings.sql`. |
+| `cleanup.dry_run` | `false` | Report what the sweep would delete without deleting. Phase 16 migration. |
+| `cleanup.screenshot_retention_days` | `30` | Days to keep debug screenshots for leads not in `failed`. Phase 16 migration. |
 
-Sixteen keys. Fourteen come from `seed_demo_data()` (§10); `encode.merge_timeout_ms` and `deploy.timeout_ms` are each inserted by their own migration instead, because §9.2 is forward-only and the seed function was already applied. The distinction is invisible in practice — migrations always run before the seed, and the function's `INSERT … ON CONFLICT (key) DO NOTHING` no-ops on a key that already exists — so every path yields the same sixteen rows. **A seventeenth key should go in the seed function, not follow this pattern.**
+Nineteen keys. Fourteen come from `seed_demo_data()` (§10); `encode.merge_timeout_ms`, `deploy.timeout_ms`, and the three `cleanup.*` keys are each inserted by their own migration instead, because §9.2 is forward-only and the seed function is already applied (252 lines — re-emitting it for each new key is not worth it). The distinction is invisible in practice — migrations always run before the seed, and the function's `INSERT … ON CONFLICT (key) DO NOTHING` no-ops on a key that already exists — so every path yields the same nineteen rows. **Rule for key #20 onward:** add keys wherever does not require re-emitting `seed_demo_data()` — at its current size that means a migration, not a seed-function edit.
 
-`lib/settings.ts` carries a `SETTING_DEFAULTS` fallback for every key and warns when one is missing from the table, so an unseeded key degrades to its default rather than breaking the pipeline. It would, however, be invisible to the Settings screen (`PRD.md` §6.8), which enumerates this table.
+`lib/settings-schema.ts` carries a `SETTING_DEFAULTS` fallback for every key and warns when one is missing from the table, so an unseeded key degrades to its default rather than breaking the pipeline. `listSettingRows` maps `SETTING_KEYS`, not DB rows, so every key appears on the Settings screen even before its migration is applied (`presentInDb: false`).
 
 Resolution order for any overlapping value: **lead override → campaign value → `settings` default**. Nulls mean "inherit", which is why the override columns in §5.4 are nullable rather than defaulted.
 
@@ -1016,6 +1019,9 @@ supabase/
     -- Added in Phase 15 (PRD.md §11):
     20260729180000_exportable_leads_view.sql       -- §4.5 — v_exportable_leads
     20260729180100_promote_campaign_leads.sql        -- §4.5 — promote_campaign_leads + unpromote_campaign_lead
+
+    -- Added in Phase 16 (PRD.md §11):
+    20260730120000_cleanup_settings.sql            -- §5.12 — cleanup.enabled, cleanup.dry_run, cleanup.screenshot_retention_days
   seed.sql                               -- one line: SELECT public.seed_demo_data();
 ```
 
@@ -1048,9 +1054,9 @@ The resolution is to declare the **column** in `core_tables` and add the **`FORE
 `seed.sql` provisions a demo campaign so a fresh clone has something to look at, and so the acceptance criteria in `PRD.md` §9 can be exercised without a real CSV.
 
 ```sql
--- Settings defaults (§5.12). Fourteen of the sixteen keys ship here;
--- encode.merge_timeout_ms (Phase 9) and deploy.timeout_ms (Phase 11) are inserted
--- by their own migrations instead (§5.12, §9.2).
+-- Settings defaults (§5.12). Fourteen of the nineteen keys ship here;
+-- encode.merge_timeout_ms (Phase 9), deploy.timeout_ms (Phase 11), and the
+-- three cleanup.* keys (Phase 16) are inserted by their own migrations instead (§5.12, §9.2).
 INSERT INTO settings (key, value, description) VALUES
   ('recorder.viewport_width',   '1920',        'Browser width for website recording'),
   ('recorder.viewport_height',  '1080',        'Browser height for website recording'),
@@ -1136,3 +1142,15 @@ Raised by the Phase 1 implementation, and **not** resolvable in the schema:
 8. **`deploy_status='removed'`** — enum value reserved for Phase 13 per-page unpublish UI. Phase 11 unpublishes via manifest omission only; the value is documented in §2.5, and the deploy step now handles it as a stale page so the Phase 13 button cannot strand a lead.
 9. **`pending_site_sync` is never pruned on abandonment.** A marker whose sync keeps failing stays forever and keeps re-enqueueing — deliberate (a stranded published page is worse than a noisy queue), but there is no age-out and no UI showing the backlog. Phase 14's Logs/Queue screens should surface a marker older than, say, an hour.
 10. **`reconcile_manifest_deploy` status guard is duplicated four times** in the RPC — one `CASE` per column, all with the same predicate. Postgres has no multi-column conditional assignment; a `FROM ... WHERE` split into two statements would read better but would touch `netlify_url` and `status` in separate passes. Revisit if the guard grows.
+
+**Carried forward from Phase 16:**
+
+- **C1 — pre-merge temp sweep vs long encodes.** `sweepStaleMergeTemps` uses a 10-minute age while `encode.merge_timeout_ms` defaults to 30 min, and two `campaign_leads` of one lead share the output dir — so at `queue.concurrency ≥ 2` a sibling's pre-merge sweep can delete a live encode's `final.<run>.tmp.mp4`. Phase 9 path/concurrency bug, not retention.
+- **C2 — shared output dir.** Two campaigns for one lead overwrite each other's `final.mp4` / `web.mp4` / `poster.jpg`. Sweep 2's warn on shared `web_path` groups is the field evidence for whether it fires.
+- **C3 — `source_batch_id` reset.** `ON DELETE SET NULL` on a deleted import batch sends later captures to `no-batch/{lead-slug}/` while older rows keep the old prefix. App-unreachable today; covered by unit test, not a fixture.
+- **C4 — pre-row PNG orphans.** PNGs written before any `recordings` row lands are unreachable from the DB; sweep 3 deliberately does not scan the filesystem.
+- **C5 — cascade-orphaned files.** Deleting a lead cascades `recordings` and leaves files on disk.
+- **C6 — `pending_site_sync` age-out** (§11 item 9 above).
+- **C7 — `logs` / `pipeline_events` growth** (§11 item 3 above).
+- **C8 — orphaned `lead-videos/*` Storage objects** when a video row is removed without a Storage delete.
+- **C9 — master retention** (`Tech.md` §17 item 1): indefinite local `final.mp4` accumulation is untested against real disk growth.

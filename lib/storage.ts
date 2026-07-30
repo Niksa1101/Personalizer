@@ -2,6 +2,22 @@ import path from "node:path"
 
 import { assertEnv } from "@/lib/env"
 
+export function assertPathContained(absPath: string): boolean {
+  const root = path.resolve(assertEnv().LOCAL_STORAGE_ROOT)
+  const resolved = path.resolve(absPath)
+  const relative = path.relative(root, resolved)
+  return relative !== ".." && !relative.startsWith(`..${path.sep}`)
+}
+
+export function resolveContainedLocalPath(
+  relPath: string | null | undefined,
+): string | null {
+  if (!relPath) return null
+  const abs = storageAbs(relPath)
+  if (!assertPathContained(abs)) return null
+  return abs
+}
+
 /** Resolve a POSIX-relative storage path to an absolute filesystem path (D12). */
 export function storageAbs(relPosix: string): string {
   const segments = relPosix.split("/").filter(Boolean)

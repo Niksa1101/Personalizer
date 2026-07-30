@@ -1,6 +1,8 @@
+import { CleanupRunCard } from "@/components/settings/cleanup-run-card"
 import { EnvHealthCard } from "@/components/settings/env-health-card"
 import { RedisHealthIndicator } from "@/components/settings/redis-health-indicator"
 import { SettingsGroupCard } from "@/components/settings/settings-group-card"
+import { getCleanupLastRun } from "@/lib/cleanup-state"
 import { getEnvHealth } from "@/lib/env-health"
 import { listSettingRows } from "@/lib/settings-admin"
 import { SETTING_GROUPS } from "@/lib/settings-schema"
@@ -10,7 +12,10 @@ export const metadata = {
 }
 
 export default async function SettingsPage() {
-  const rows = await listSettingRows()
+  const [rows, lastCleanup] = await Promise.all([
+    listSettingRows(),
+    getCleanupLastRun(),
+  ])
   const envHealth = getEnvHealth()
 
   return (
@@ -27,6 +32,7 @@ export default async function SettingsPage() {
         {SETTING_GROUPS.map((group) => (
           <SettingsGroupCard key={group} group={group} rows={rows} />
         ))}
+        <CleanupRunCard lastRun={lastCleanup} />
         <EnvHealthCard entries={envHealth} redisIndicator={<RedisHealthIndicator />} />
       </div>
     </div>

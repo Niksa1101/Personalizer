@@ -3,13 +3,12 @@ import { mkdir, stat } from "node:fs/promises"
 import ffmpegPath from "ffmpeg-static"
 
 import {
+  deleteContainedRelPath,
   moveFile,
-  removeFile,
   sweepStaleMergeTemps,
 } from "@/lib/local-file"
 import {
   evaluateRecordingPrecheck,
-  PURGED_RERECORD_NOTE,
 } from "@/lib/recording-precheck"
 import {
   PipelineStepError,
@@ -48,7 +47,7 @@ import {
 import {
   discardMergeArtifacts,
   getIntroVideo,
-  getUsableRecording,
+  getLatestRecordingForPrecheck,
   getVideoForCampaignLead,
   linkRecordingToCampaignLead,
   linkVideoToCampaignLead,
@@ -201,7 +200,7 @@ export async function runMerge(ctx: StepContext): Promise<MergeStepNote> {
     throw new PipelineStepError("missing_asset", "Intro video file is missing.")
   }
 
-  const existing = await getUsableRecording(lead.lead.id)
+  const existing = await getLatestRecordingForPrecheck(lead.lead.id)
   const precheck = await evaluateRecordingPrecheck({
     recording: existing,
     forcedRerecord: false,
@@ -214,15 +213,18 @@ export async function runMerge(ctx: StepContext): Promise<MergeStepNote> {
     )
   }
 
+  if (precheck.action === "record_purged") {
+    throw new PipelineStepError(
+      "missing_asset",
+      "Recording was purged; re-record required.",
+    )
+  }
+
   if (precheck.action === "record_fresh") {
     throw new PipelineStepError(
       "missing_asset",
       "Lead has no linked recording.",
     )
-  }
-
-  if (precheck.action === "record_purged") {
-    throw new PipelineStepError("missing_asset", PURGED_RERECORD_NOTE)
   }
 
   if (campaignLead.recording_id !== precheck.recordingId) {
@@ -294,7 +296,7 @@ export async function runMerge(ctx: StepContext): Promise<MergeStepNote> {
     const discarded = await discardMergeArtifacts(campaignLead.id)
     uploadReservedKey = null
     for (const relPath of discarded.paths) {
-      await removeFile(storageAbs(relPath)).catch(() => undefined)
+      await deleteContainedRelPath(relPath).catch(() => undefined)
     }
     if (discarded.oldStorageKey) {
       await deleteStorageObject(discarded.oldStorageKey, {

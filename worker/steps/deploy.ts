@@ -259,7 +259,6 @@ export const deployStep: Step = {
     }
 
     const triggerPageBefore = await loadDeployLandingPage(campaignLeadId)
-    const wasLiveBefore = triggerPageBefore?.deploy_status === "live"
     const leadRef = await loadLeadRef(lead.id)
     let siteSyncEnqueued = false
 
@@ -429,30 +428,28 @@ export const deployStep: Step = {
             message: `Deployed to ${triggerNetlifyUrl}`,
           })
 
-          if (!wasLiveBefore) {
-            try {
-              const cleanup = await cleanupLocalWebMp4(campaignLeadId)
-              if (cleanup.removed) {
-                await writeDeployerLog({
-                  level: "info",
-                  message: "Removed local web.mp4 after first live deploy",
-                  meta: {
-                    campaign_lead_id: campaignLeadId,
-                    path: cleanup.path,
-                  },
-                })
-              }
-            } catch (error) {
+          try {
+            const cleanup = await cleanupLocalWebMp4(campaignLeadId)
+            if (cleanup.removed) {
               await writeDeployerLog({
-                level: "warn",
-                message: "Failed to remove local web.mp4 (non-fatal)",
+                level: "info",
+                message: "Removed local web.mp4 after deploy",
                 meta: {
                   campaign_lead_id: campaignLeadId,
-                  error:
-                    error instanceof Error ? error.message : String(error),
+                  path: cleanup.path,
                 },
               })
             }
+          } catch (error) {
+            await writeDeployerLog({
+              level: "warn",
+              message: "Failed to remove local web.mp4 (non-fatal)",
+              meta: {
+                campaign_lead_id: campaignLeadId,
+                error:
+                  error instanceof Error ? error.message : String(error),
+              },
+            })
           }
 
           return

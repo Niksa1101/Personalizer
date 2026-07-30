@@ -25,6 +25,9 @@ export type SettingKey =
   | "queue.auto_retry_limit"
   | "deploy.dry_run"
   | "deploy.timeout_ms"
+  | "cleanup.enabled"
+  | "cleanup.dry_run"
+  | "cleanup.screenshot_retention_days"
 
 export type SettingValues = {
   "recorder.viewport_width": number
@@ -43,6 +46,9 @@ export type SettingValues = {
   "queue.auto_retry_limit": number
   "deploy.dry_run": boolean
   "deploy.timeout_ms": number
+  "cleanup.enabled": boolean
+  "cleanup.dry_run": boolean
+  "cleanup.screenshot_retention_days": number
 }
 
 export const SETTING_KEYS = [
@@ -62,6 +68,9 @@ export const SETTING_KEYS = [
   "queue.auto_retry_limit",
   "deploy.dry_run",
   "deploy.timeout_ms",
+  "cleanup.enabled",
+  "cleanup.dry_run",
+  "cleanup.screenshot_retention_days",
 ] as const satisfies readonly SettingKey[]
 
 /** Seed defaults from DB.md §5.12 — used when a key is absent from the DB. */
@@ -82,6 +91,9 @@ export const SETTING_DEFAULTS: SettingValues = {
   "queue.auto_retry_limit": 2,
   "deploy.dry_run": false,
   "deploy.timeout_ms": 300_000,
+  "cleanup.enabled": true,
+  "cleanup.dry_run": false,
+  "cleanup.screenshot_retention_days": 30,
 }
 
 export const MERGE_LAYOUTS = [
@@ -99,6 +111,7 @@ export type SettingGroup =
   | "Encode"
   | "Queue"
   | "Deploy"
+  | "Cleanup"
 
 export const SETTING_GROUPS: SettingGroup[] = [
   "Recorder",
@@ -106,6 +119,7 @@ export const SETTING_GROUPS: SettingGroup[] = [
   "Encode",
   "Queue",
   "Deploy",
+  "Cleanup",
 ]
 
 export type OverrideScope =
@@ -261,6 +275,27 @@ export const SETTING_FIELDS: Record<SettingKey, SettingFieldMeta> = {
     integer: true,
     min: 30_000,
     max: 1_800_000,
+    overrideScope: "Global only",
+  },
+  "cleanup.enabled": {
+    group: "Cleanup",
+    label: "Run daily cleanup",
+    type: "boolean",
+    overrideScope: "Global only",
+  },
+  "cleanup.dry_run": {
+    group: "Cleanup",
+    label: "Dry run",
+    type: "boolean",
+    overrideScope: "Global only",
+  },
+  "cleanup.screenshot_retention_days": {
+    group: "Cleanup",
+    label: "Screenshot retention (days)",
+    type: "integer",
+    integer: true,
+    min: 1,
+    max: 365,
     overrideScope: "Global only",
   },
 }

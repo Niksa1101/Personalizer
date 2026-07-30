@@ -4,6 +4,8 @@ import { revalidatePath } from "next/cache"
 import { z } from "zod"
 
 import { verifySession } from "@/lib/dal"
+import { CLEANUP_LOCK_KEY } from "@/worker/cleanup/job"
+import { enqueueCleanup, getRedis } from "@/lib/queue"
 import { upsertSettings } from "@/lib/settings-admin"
 import {
   keysForGroup,
@@ -76,5 +78,50 @@ export async function updateSettingsGroupAction(
     return {
       error: error instanceof Error ? error.message : "Failed to save settings",
     }
+  }
+}
+
+const ENQUEUE_TIMEOUT_MS = 3_000
+
+export async function runCleanupNowAction(): Promise<{
+  ok: boolean
+  message: string
+}> {
+  await verifySession()
+
+  try {
+    const lockPresent = await getRedis().get(CLEANUP_LOCK_KEY)
+    if (lockPresent) {
+      return { ok: false, message: "A cleanup is already running." }
+    }
+  } catch {
+    // advisory only — proceed to enqueue
+  }
+
+  let timer: NodeJS.Timeout | undefined
+  try {
+    await Promise.race([
+      enqueueCleanup(`cleanup-manual-${Date.now()}`, "manual"),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () =>
+            reject(
+              new Error(
+                `Redis enqueue timed out after ${ENQUEUE_TIMEOUT_MS}ms`,
+              ),
+            ),
+          ENQUEUE_TIMEOUT_MS,
+        )
+      }),
+    ])
+    revalidatePath("/settings")
+    return { ok: true, message: "Cleanup queued." }
+  } catch {
+    return {
+      ok: false,
+      message: "Couldn't confirm — the job may still land.",
+    }
+  } finally {
+    clearTimeout(timer)
   }
 }
