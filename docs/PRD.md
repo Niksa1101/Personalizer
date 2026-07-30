@@ -954,15 +954,42 @@ Verified by `npm run typecheck`, `npm run lint`, `npm test` (**307 tests** — 2
 
 ---
 
-#### Phase 15 — Promote and export
+#### Phase 15 — Promote and export ✅ **DONE** (2026-07-30)
 
-Bulk `Deployed` → `Ready` promotion, and `GET /api/export` per `Tech.md` §12 — UTF-8 with BOM, defaulting to `Ready`.
+Bulk `Deployed` → `Ready` promotion (`promote_campaign_leads` RPC + bulk bar + drawer controls), unpromote in the drawer, and `GET /api/export` per `Tech.md` §12 — UTF-8 with BOM, CRLF, 19 columns, formula-injection escape, `v_exportable_leads` as the single shared predicate for promote eligibility and export exclusion.
 
-**Exit:** the exported CSV opens correctly in Excel with intact accents. Every URL in it resolves (**AC-2**).
+| Exit criterion | Verified by |
+|---|---|
+| Bulk promote `Deployed` → `Ready` with skip-and-report | `verify:export` promote legs + `verify:export-ui` `bulk promote dialog updates badge` |
+| Export CSV bytes (BOM, CRLF, accents, injection escape) | `verify:export` `CSV accents`, `CSV formula injection`, `CSV CRLF only`, `CSV final record terminated`, `GET /api/export BOM` + `lib/csv.test.ts` / `lib/export.test.ts` |
+| `promoted_at` set / overwritten / cleared | `verify:export` promote + re-promote + unpromote legs (incl. `re-promote writes a second promoted event`) |
+| Drawer approval note (`Approved` while `ready`; `Previously approved` when promoted but off `ready`) | `verify:export-ui` `drawer approval note while ready`, `drawer previously approved note`, `unpromote clears approval note` |
+| Unpublished-page rows excluded from export | `verify:export` `canPromote/export seam removed page` + `GET /api/export exclusion header` + `GET /api/export body excludes removed` (fixture `company` cell) |
+| Opens correctly in Excel (**AC-2** partial) | Automated bytes only — **manual Excel confirmation pending** |
 
-> **AC-2 hazard from Phase 13 unpublish.** Unpublish keeps `netlify_url` on the lead while setting `landing_pages.deploy_status='removed'`. Export must not emit dead URLs for those rows — join `landing_pages` and skip or flag `deploy_status='removed'` even when `status='ready'`.
+Also ships: `v_exportable_leads`, `promote_campaign_leads`, `unpromote_campaign_lead`, `lib/csv.ts`, `lib/export.ts`, `lib/lead-actions.canPromote`, export/promote UI, `npm run verify:export`, `npm run verify:export-ui`, `verify:schema` extended (9/9), `verify-leads-ui` harness migration to `scripts/fixtures/ui-harness.ts`.
 
----
+**Notes:** Export filename timestamps are **UTC**. Phone numbers with a leading `+` export as `'+1 …` (formula-injection control). `verify:export`'s AC-2 URL leg checks live `ready` URLs only — it does **not** prove video playback on desktop/mobile (Phase 18). `security_invoker` on the view is belt-and-braces; access is enforced by `REVOKE` + `service_role` grant.
+
+**Migrations:** `20260729180000_exportable_leads_view.sql`, `20260729180100_promote_campaign_leads.sql`.
+
+**Applied.** Both are recorded in `supabase_migrations.schema_migrations` (`20260729180000`, `20260729180100`); `db push` is a no-op after them. Verified live: `v_exportable_leads` is service-role `SELECT` only; `promote_campaign_leads` / `unpromote_campaign_lead` match `lib/database.types.ts`.
+
+**Deferrals:** bulk unpromote; `X-Export-*` headers are not a stable API; pacing/stream deferrals unchanged; AC-6 still uncovered; cross-page selection count/blast-radius (manual check only — structurally fixed, no automated leg).
+
+#### Review findings (Phase 15)
+
+The first pass marked **DONE** while `npm run typecheck` had never been run on the diff and two exit criteria had no dev-server evidence. Every fix below was mutation-tested where an automated leg exists.
+
+1. **`Views` entry broke pre-existing `lib/leads.ts` typing while the gate that would have caught it was never run.** Adding `v_exportable_leads` to `database.types.ts` changed `from()` overload resolution; the pre-existing `applyLeadFilters` helper (and the copied idiom in `lib/export.ts`) silently resolved to `PostgrestQueryBuilder`, which has no `.eq`/`.in`. Fixed with a generic identity signature and `PostgrestFilterable` in `lib/supabase.ts`. **`npm run typecheck` now reports 0 errors.**
+2. **Bulk-bar selection count was page-scoped while retry/delete still acted on every selected id across pages.** The delete dialog could read "Remove 2 leads" and remove 5. `selectedCount` (full set) is now the source of truth for the label and dialog; `selectedRows` is eligibility-only, with an off-page note in `PromoteDialog`.
+3. **`verify:leads-ui` could not run** — four dangling identifiers from the W13 harness migration (`summarize`, missing `context` destructure), breaking Phase 12's stream-loss leg on the live path.
+4. **`verify:export` exit criteria overstated dev-server coverage** — the phase summary cited HTTP legs (BOM, exclusion header, body filter, AC-2 URL) and `verify:export-ui` as verified even when the dev server was unreachable. Skipped legs were excluded from the pass denominator (`asserted = results.length - skipped`, so `22/22 checks passed, 4 skipped` was arithmetically honest but easy to misread as full coverage), while the exit table still listed those legs as done and claimed `verify:export-ui` had run when it had not. Seam, CSV, teardown, and header legs were also tautological or vacuous; all repaired and split into strict named legs.
+5. **`verify:export-ui` could not pass as written** — `status=deployed` filter dropped the row after promote; badge assertions matched the filter-bar Select; no `try/catch`/`finally` summary. Rewritten to five named legs with scoped locators and route interception for BOM (Playwright cannot read a body already consumed by the page's `fetch`).
+6. **`GET /api/export body excludes removed` was tautological** — asserted on `campaign_leads.id`, which is not an export column; the leg passed under an exclusion-filter mutation while the seam leg failed. Now asserts on the fixture's `company` cell (`Removed page <runId>`).
+7. **`X-Export-Missing-Video` and `X-Export-Row-Count` legs vanished when the dev server was unreachable** — neither skip branch registered them, so the leg denominator changed between runs (e.g. 27/27 + 4 skipped vs 33 total). Both branches now register all five HTTP legs. **`bulkPromoteAction`'s 23514 catch** dedupes via `unique` instead of raw `ids`.
+
+Verified by `npm run typecheck` (**0 errors**), `npm run lint` (0 errors; 1 pre-existing React Compiler warning in `leads-table.tsx`), `npm test` (**336** tests), `npm run verify:server-only` **5/5**, `npm run verify:schema` **9/9**, `npm run verify:export` **33/33** (**1 skipped** — AC-2 URL leg: no non-`example.com` `ready` rows in the project), `npm run verify:export-ui` **5/5**, `npm run verify:leads-ui` **11/11** — with Redis and a dev server on port 3000.
 
 ### Stage E — Operations
 

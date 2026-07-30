@@ -6,11 +6,13 @@ import { toast } from "sonner"
 
 import {
   bulkDeleteAction,
+  bulkPromoteAction,
   bulkRetryAction,
   loadLeadDetailAction,
 } from "@/app/(app)/leads/actions"
 import { ConnectivityIndicator } from "@/components/connectivity-indicator"
 import { BulkActionBar } from "@/components/leads/bulk-action-bar"
+import { ExportButton } from "@/components/leads/export-button"
 import { LeadDrawer } from "@/components/leads/lead-drawer"
 import { LeadFiltersBar } from "@/components/leads/lead-filters-bar"
 import { LeadPagination } from "@/components/leads/lead-pagination"
@@ -35,6 +37,8 @@ type LeadsViewProps = {
   campaigns: CampaignOption[]
   filters: LeadFilters
   batches: Array<{ id: string; label: string }>
+  exportableCount: number
+  exportExcludedCount: number
 }
 
 export function LeadsView({
@@ -42,6 +46,8 @@ export function LeadsView({
   campaigns,
   filters,
   batches,
+  exportableCount,
+  exportExcludedCount,
 }: LeadsViewProps) {
   const router = useRouter()
   const [rows, setRows] = useState(initialResult.rows)
@@ -167,6 +173,44 @@ export function LeadsView({
     router.refresh()
   }
 
+  async function handleBulkPromote(eligibleIds: string[]) {
+    try {
+      const { outcomes } = await bulkPromoteAction(eligibleIds)
+      const promoted = outcomes.filter((o) => o.outcome === "success").length
+      const skipped = outcomes.filter((o) => o.outcome === "skipped")
+      const failed = outcomes.filter((o) => o.outcome === "failed")
+
+      if (failed.length > 0) {
+        toast.error(`${failed.length} lead(s) failed to promote`)
+      } else if (promoted === 0 && skipped.length > 0) {
+        toast.message(`Promoted 0. Skipped ${skipped.length}`, {
+          description: summarizeSkipReasons(skipped),
+        })
+      } else if (skipped.length > 0) {
+        toast.success(`Promoted ${promoted}. Skipped ${skipped.length} — ${summarizeSkipReasons(skipped)}`)
+      } else {
+        toast.success(`Promoted ${promoted} lead${promoted === 1 ? "" : "s"}`)
+      }
+      setSelected(new Set())
+      router.refresh()
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Promote failed")
+    }
+  }
+
+  function summarizeSkipReasons(
+    skipped: Array<{ reason?: string }>,
+  ): string {
+    const counts = new Map<string, number>()
+    for (const item of skipped) {
+      const label = item.reason ?? "skipped"
+      counts.set(label, (counts.get(label) ?? 0) + 1)
+    }
+    return [...counts.entries()]
+      .map(([reason, count]) => `${count} ${reason.toLowerCase()}`)
+      .join(", ")
+  }
+
   async function handleBulkDelete(retain: boolean) {
     const ids = [...selected]
     const { outcomes } = await bulkDeleteAction(ids, retain)
@@ -190,6 +234,9 @@ export function LeadsView({
   )
 
   const showEmpty = initialResult.total === 0 && !hasActiveFilters
+
+  const selectedRows = rows.filter((row) => selected.has(row.id))
+  const activeCampaign = campaigns.find((c) => c.id === filters.campaignId)
 
   return (
     <div className="flex flex-1 flex-col gap-4 p-6">
@@ -216,6 +263,13 @@ export function LeadsView({
         />
       </Suspense>
 
+      <ExportButton
+        campaignId={filters.campaignId}
+        campaignName={activeCampaign?.name ?? null}
+        exportableCount={exportableCount}
+        excludedCount={exportExcludedCount}
+      />
+
       {stream.newLeadCount > 0 ? (
         <Button
           variant="outline"
@@ -240,8 +294,10 @@ export function LeadsView({
       ) : (
         <>
           <BulkActionBar
-            count={selected.size}
+            selectedCount={selected.size}
+            selectedRows={selectedRows}
             onRetry={handleBulkRetry}
+            onPromote={handleBulkPromote}
             onDelete={handleBulkDelete}
             onClear={() => setSelected(new Set())}
           />

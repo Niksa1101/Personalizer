@@ -1,4 +1,5 @@
 import { LeadsView } from "@/components/leads/leads-view"
+import { countExportRows } from "@/lib/export"
 import { parseLeadFilters, serializeLeadFilters } from "@/lib/lead-filters"
 import { listCampaignOptions, listLeads } from "@/lib/leads"
 import { getSupabaseAdmin } from "@/lib/supabase"
@@ -35,10 +36,14 @@ export default async function LeadsPage({ searchParams }: LeadsPageProps) {
   const params = await searchParams
   const filters = parseLeadFilters(params)
 
-  const [result, campaigns, batches] = await Promise.all([
+  const [result, campaigns, batches, exportCounts] = await Promise.all([
     listLeads(filters),
     listCampaignOptions(),
     listBatchOptions(filters.campaignId),
+    countExportRows({
+      campaignId: filters.campaignId,
+      statuses: ["ready"],
+    }),
   ])
 
   return (
@@ -48,6 +53,8 @@ export default async function LeadsPage({ searchParams }: LeadsPageProps) {
       campaigns={campaigns}
       filters={filters}
       batches={batches}
+      exportableCount={exportCounts.exportable}
+      exportExcludedCount={exportCounts.excluded}
     />
   )
 }

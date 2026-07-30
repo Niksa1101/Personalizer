@@ -9,6 +9,7 @@ import { DeleteLeadDialog } from "@/components/leads/delete-lead-dialog"
 import { LeadEditForm } from "@/components/leads/lead-edit-form"
 import { LeadErrorBlock } from "@/components/leads/lead-error-block"
 import { LeadMedia } from "@/components/leads/lead-media"
+import { PromoteControls } from "@/components/leads/promote-controls"
 import { LeadTimeline } from "@/components/leads/lead-timeline"
 import { RetryControls } from "@/components/leads/retry-controls"
 import { UnpublishDialog } from "@/components/leads/unpublish-dialog"
@@ -104,8 +105,8 @@ export function LeadDrawer({
                 </p>
                 {detail.promoted_at ? (
                   <p className="text-xs text-muted-foreground">
-                    Previously approved (promoted{" "}
-                    {formatDateTime(detail.promoted_at)})
+                    {detail.status === "ready" ? "Approved" : "Previously approved"}{" "}
+                    (promoted {formatDateTime(detail.promoted_at)})
                   </p>
                 ) : null}
                 <div className="flex flex-wrap gap-2">
@@ -179,6 +180,21 @@ export function LeadDrawer({
                   ) : (
                     <p className="text-sm text-muted-foreground">Not deployed yet</p>
                   )}
+                </section>
+
+                <section className="space-y-2">
+                  <h3 className="text-sm font-medium">Approval</h3>
+                  <PromoteControls
+                    detail={detail}
+                    disabled={loading}
+                    onChanged={() => {
+                      if (!leadId) return
+                      setLoading(true)
+                      void loadDetail(leadId)
+                        .then((next) => setDetail(next))
+                        .finally(() => setLoading(false))
+                    }}
+                  />
                 </section>
 
                 <section className="space-y-2">

@@ -39,6 +39,7 @@ const PURE_CLIENT_MODULES = [
   path.join(ROOT, "lib", "lead-actions.ts"),
   path.join(ROOT, "lib", "website-url.ts"),
   path.join(ROOT, "lib", "error-copy.ts"),
+  path.join(ROOT, "lib", "csv.ts"),
 ]
 
 const FORBIDDEN_IMPORT =
@@ -50,6 +51,7 @@ const SERVER_ONLY_MODULES = [
   path.join(ROOT, "lib", "queue-health.ts"),
   path.join(ROOT, "lib", "queue-clear.ts"),
   path.join(ROOT, "lib", "logs.ts"),
+  path.join(ROOT, "lib", "export.ts"),
 ]
 
 const CLIENT_IMPORTABLE_MODULES = [
@@ -138,7 +140,7 @@ function assertPureModulesBrowserSafe(): void {
   }
 
   console.log(
-    "PASS  lib/lead-actions.ts, lib/website-url.ts, lib/error-copy.ts are browser-safe",
+    "PASS  lib/lead-actions.ts, lib/website-url.ts, lib/error-copy.ts, lib/csv.ts are browser-safe",
   )
 }
 

@@ -1,7 +1,7 @@
 import { describe, it } from "node:test"
 import assert from "node:assert/strict"
 
-import { buildRetryPatch, canRetry, RETRYABLE_STATUSES } from "@/lib/lead-actions"
+import { buildRetryPatch, canRetry, RETRYABLE_STATUSES, canPromote, PROMOTE_SKIP_COPY, PROMOTE_SKIP_REASONS } from "@/lib/lead-actions"
 import { PIPELINE_STEPS } from "@/lib/pipeline-types"
 import type { LeadStatus } from "@/lib/campaign-types"
 
@@ -50,5 +50,47 @@ describe("canRetry", () => {
     assert.equal(canRetry("skipped", "step", "recording"), true)
     assert.equal(canRetry("skipped", "step", "merge"), false)
     assert.equal(canRetry("skipped", "resume"), false)
+  })
+})
+
+describe("canPromote", () => {
+  it("requires deployed status with live URL and non-removed page", () => {
+    assert.deepEqual(
+      canPromote({
+        status: "deployed",
+        netlifyUrl: "https://example.com/x",
+        pageDeployStatus: "live",
+      }),
+      { ok: true },
+    )
+  })
+
+  it("treats null pageDeployStatus as eligible (no page row)", () => {
+    assert.deepEqual(
+      canPromote({
+        status: "deployed",
+        netlifyUrl: "https://example.com/x",
+        pageDeployStatus: null,
+      }),
+      { ok: true },
+    )
+  })
+
+  it("rejects removed page before other checks after status/url", () => {
+    assert.equal(
+      canPromote({
+        status: "deployed",
+        netlifyUrl: "https://example.com/x",
+        pageDeployStatus: "removed",
+      }).ok,
+      false,
+    )
+  })
+
+  it("PROMOTE_SKIP_COPY covers every skip reason", () => {
+    for (const reason of PROMOTE_SKIP_REASONS) {
+      assert.ok(PROMOTE_SKIP_COPY[reason], reason)
+    }
+    assert.equal(Object.keys(PROMOTE_SKIP_COPY).length, PROMOTE_SKIP_REASONS.length)
   })
 })

@@ -839,7 +839,34 @@ export type Database = {
       }
     }
     Views: {
-      [_ in never]: never
+      v_exportable_leads: {
+        Row: {
+          campaign_archived: boolean
+          campaign_id: string
+          campaign_name: string
+          campaign_ref: string
+          city: string | null
+          company: string | null
+          country: string | null
+          deployed_at: string | null
+          email: string | null
+          first_name: string | null
+          full_name: string | null
+          id: string
+          industry: string | null
+          is_page_removed: boolean
+          landing_url: string | null
+          last_name: string | null
+          lead_ref: string
+          phone: string | null
+          promoted_at: string | null
+          state: string | null
+          status: Database["public"]["Enums"]["lead_status"]
+          video_url: string | null
+          website_url: string | null
+        }
+        Relationships: []
+      }
     }
     Functions: {
       delete_campaign_retaining_pages: {
@@ -871,6 +898,19 @@ export type Database = {
       next_campaign_ref: { Args: never; Returns: string }
       next_lead_ref: { Args: never; Returns: string }
       normalize_domain: { Args: { raw: string }; Returns: string }
+      promote_campaign_leads: {
+        Args: { p_ids: string[]; p_trigger?: string }
+        Returns: {
+          campaign_lead_id: string
+          lead_ref: string
+          outcome: string
+          reason: string | null
+        }[]
+      }
+      unpromote_campaign_lead: {
+        Args: { p_campaign_lead_id: string }
+        Returns: undefined
+      }
       reconcile_manifest_deploy: {
         Args: { p_deploy_id: string; p_deployed_at: string; p_rows: Json }
         Returns: undefined

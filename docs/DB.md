@@ -205,7 +205,7 @@ CREATE TYPE event_kind AS ENUM (
 );
 ```
 
-`note` carries free-text system annotations that are not state changes — for example "raw recording had been purged; re-recorded automatically".
+`note` carries free-text system annotations that are not state changes — for example "raw recording had been purged; re-recorded automatically". **`promoted`** and **`unpublished`** are written by the web app (Phase 15 / Phase 13 respectively); `promoted` events have `step IS NULL`.
 
 ### 2.9 `log_level`
 
@@ -318,6 +318,14 @@ $$;
 ```
 
 `campaign_leads.error_bucket` is a **generated column** over this function, so bucket filtering is a plain indexed predicate and the two fields can never drift.
+
+### 4.5 Export and promotion helpers (Phase 15)
+
+**`v_exportable_leads`** — flattened export/promote predicate. Joins `campaign_leads → leads → campaigns`, `LEFT JOIN landing_pages` on `campaign_leads.landing_page_id` (not the reverse), `LEFT JOIN videos` on `campaign_leads.video_id`. Exposes `is_page_removed = COALESCE(lp.deploy_status = 'removed', false)` — without `COALESCE`, leads with no page row would be treated as removed. Service-role `SELECT` only.
+
+**`promote_campaign_leads(p_ids uuid[], p_trigger text)`** — set-based `deployed → ready`, sets `promoted_at = now()`, writes one `promoted` pipeline event per success (`step IS NULL`). Returns one outcome row per input id. Cap 200; empty array is a no-op.
+
+**`unpromote_campaign_lead(p_campaign_lead_id uuid)`** — single-lead `ready → deployed`, clears `promoted_at`, writes a `note` event.
 
 ---
 
@@ -453,7 +461,7 @@ One lead's participation in one campaign. Everything the pipeline reads and writ
 | `started_at` | `timestamptz` | yes | — | First time a worker picked it up. |
 | `deployed_at` | `timestamptz` | yes | — | |
 | `deployed_dry_run` | `boolean` | no | `false` | Set when `settings.deploy.dry_run` completes the pipeline without a real Netlify URL. Cleared on the next live deploy. |
-| `promoted_at` | `timestamptz` | yes | — | `deployed` → `ready`. |
+| `promoted_at` | `timestamptz` | yes | — | Set by `promote_campaign_leads()` on `deployed` → `ready`; cleared by `unpromote_campaign_lead()`. Overwritten on re-promotion. |
 | `created_at` | `timestamptz` | no | `now()` | |
 | `updated_at` | `timestamptz` | no | `now()` | trigger |
 
@@ -868,7 +876,7 @@ REVOKE ALL ON ALL FUNCTIONS IN SCHEMA public FROM PUBLIC, anon, authenticated;
 
 Neither gap was exploitable when found: the two ref functions run with invoker rights and `anon` has no `USAGE` on the sequences, so they error out; the other two are pure. The value is entirely forward-looking.
 
-Two notes for anyone revisiting this. `ALTER DEFAULT PRIVILEGES` binds to the **current role** — `postgres` for migrations, which is the role carrying the grants; the parallel `supabase_admin` entries are platform-owned and left alone. And the live project ships a Supabase platform event trigger, `public.rls_auto_enable()`, that enables RLS on each new `public` table — so the residual risk here was never really about tables. It was about **views** (no RLS of their own, and the trigger fires only on `CREATE TABLE`) and **functions**, which is what the default privileges above actually close.
+Two notes for anyone revisiting this. `ALTER DEFAULT PRIVILEGES` binds to the **current role** — `postgres` for migrations, which is the role carrying the grants; the parallel `supabase_admin` entries are platform-owned and left alone. And the live project ships a Supabase platform event trigger, `public.rls_auto_enable()`, that enables RLS on each new `public` table — so the residual risk here was never really about tables. It was about **views** (no RLS of their own, and the trigger fires only on `CREATE TABLE`) and **functions**, which is what the default privileges above actually close. Phase 15 adds `v_exportable_leads` with explicit `REVOKE ALL … FROM PUBLIC, anon, authenticated` and `GRANT SELECT TO service_role` — `security_invoker = true` is belt-and-braces; access works because only `service_role` holds the grant.
 
 ### 7.2 Realtime
 
@@ -1004,6 +1012,10 @@ supabase/
     20260726160000_dashboard_counts_fixes.sql      -- scoped/recent ETA, processing order + SQL cap
     20260726170000_ref_padding_no_truncate.sql     -- §4.2 — lpad() truncation cliff
     20260726180000_dashboard_eta_samples_fn.sql    -- dashboard_eta_samples() — one copy of the rule
+
+    -- Added in Phase 15 (PRD.md §11):
+    20260729180000_exportable_leads_view.sql       -- §4.5 — v_exportable_leads
+    20260729180100_promote_campaign_leads.sql        -- §4.5 — promote_campaign_leads + unpromote_campaign_lead
   seed.sql                               -- one line: SELECT public.seed_demo_data();
 ```
 

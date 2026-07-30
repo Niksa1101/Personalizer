@@ -1,25 +1,46 @@
 "use client"
 
-import { useState } from "react"
+import { useMemo, useState } from "react"
 
+import { canPromote } from "@/lib/lead-actions"
+import type { LeadListRow } from "@/lib/leads"
 import { DeleteLeadDialog } from "@/components/leads/delete-lead-dialog"
+import { PromoteDialog } from "@/components/leads/promote-dialog"
 import { Button } from "@/components/ui/button"
 
 type BulkActionBarProps = {
-  count: number
+  selectedCount: number
+  selectedRows: LeadListRow[]
   onRetry: () => Promise<void>
+  onPromote: (eligibleIds: string[]) => Promise<void>
   onDelete: (retain: boolean) => Promise<void>
   onClear: () => void
 }
 
 export function BulkActionBar({
-  count,
+  selectedCount,
+  selectedRows,
   onRetry,
+  onPromote,
   onDelete,
   onClear,
 }: BulkActionBarProps) {
   const [busy, setBusy] = useState(false)
   const [deleteOpen, setDeleteOpen] = useState(false)
+  const [promoteOpen, setPromoteOpen] = useState(false)
+
+  const count = selectedCount
+
+  const { eligibleRows, eligibleCount } = useMemo(() => {
+    const eligible = selectedRows.filter((row) =>
+      canPromote({
+        status: row.status,
+        netlifyUrl: row.netlify_url,
+        pageDeployStatus: row.landing_pages?.deploy_status ?? null,
+      }).ok,
+    )
+    return { eligibleRows: eligible, eligibleCount: eligible.length }
+  }, [selectedRows])
 
   if (count === 0) return null
 
@@ -27,6 +48,14 @@ export function BulkActionBar({
     <>
       <div className="flex flex-wrap items-center gap-2 rounded-md border bg-muted/30 px-3 py-2">
         <span className="text-sm font-medium">{count} selected</span>
+        <Button
+          size="sm"
+          variant="default"
+          disabled={busy || eligibleCount === 0}
+          onClick={() => setPromoteOpen(true)}
+        >
+          Promote {eligibleCount} to Ready
+        </Button>
         <Button
           size="sm"
           variant="outline"
@@ -54,6 +83,16 @@ export function BulkActionBar({
           Clear
         </Button>
       </div>
+
+      <PromoteDialog
+        open={promoteOpen}
+        onOpenChange={setPromoteOpen}
+        selectedRows={selectedRows}
+        offPageCount={Math.max(0, selectedCount - selectedRows.length)}
+        onConfirm={async () => {
+          await onPromote(eligibleRows.map((row) => row.id))
+        }}
+      />
 
       <DeleteLeadDialog
         open={deleteOpen}
