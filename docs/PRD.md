@@ -995,7 +995,7 @@ Verified by `npm run typecheck` (**0 errors**), `npm run lint` (0 errors; 1 pre-
 
 ---
 
-#### Phase 16 — Retention and cleanup
+#### Phase 16 — Retention and cleanup ✅ **DONE** (2026-07-30)
 
 The daily repeatable job (`Tech.md` §7.5): 30-day recording purge, inline + sweep-2 `web.mp4` deletion after deploy, screenshot pruning that spares failed leads.
 
@@ -1003,13 +1003,17 @@ The daily repeatable job (`Tech.md` §7.5): 30-day recording purge, inline + swe
 
 | Criterion | Verified by |
 |---|---|
-| A recording older than the retention window is purged and its row updated | `verify:cleanup` — `purge deletes the file and sets purged_at` |
-| A step needing a purged recording re-records silently and writes a `note` event | `verify:record` — `record step writes the purged re-record note event` |
-| A *missing but not purged* file fails with `missing_asset` instead | `verify:record` — `precheck classifies a missing-but-not-purged row as missing_asset`; `record step fails missing-but-not-purged with missing_asset` |
-| Purged-vs-missing classification is consistent across scripts | **Both** `verify:cleanup` and `verify:record` must be green (D22) — inverting the `purged_at` check must redden legs in both |
-| Inline deploy cleanup resolves against `LOCAL_STORAGE_ROOT` | `verify:deploy` — `inline web.mp4 cleanup removes file from LOCAL_STORAGE_ROOT` |
-| Redeploy after page regeneration removes local `web.mp4` | `verify:deploy` — `redeploy removes regenerated web.mp4` (`wasLiveBefore` guard removed) |
-| Drawer copy for purged / missing / gone screenshots | `verify:leads-ui` — three Phase 16 drawer legs |
+| A recording older than the retention window is purged and its row updated | ✅ `verify:cleanup` — `purge deletes the file and sets purged_at` |
+| A step needing a purged recording re-records silently and writes a `note` event | ✅ `verify:record` — `record step writes the purged re-record note event` |
+| A *missing but not purged* file fails with `missing_asset` instead | ✅ `verify:record` — `precheck classifies a missing-but-not-purged row as missing_asset`; `record step fails missing-but-not-purged with missing_asset` |
+| Purged-vs-missing classification is consistent across scripts | ✅ **Both** `verify:cleanup` and `verify:record` must be green (D22) — inverting the `purged_at` check must redden legs in both |
+| Inline deploy cleanup resolves against `LOCAL_STORAGE_ROOT` | ✅ `verify:deploy` — `inline web.mp4 cleanup removes file from LOCAL_STORAGE_ROOT` |
+| Redeploy after page regeneration removes local `web.mp4` | ✅ `verify:deploy` — `redeploy removes regenerated web.mp4` (`wasLiveBefore` guard removed) |
+| Drawer copy for purged / missing / gone screenshots | ✅ `verify:leads-ui` — three Phase 16 drawer legs |
+
+**Migrations:** `20260730120000_cleanup_settings.sql`.
+
+**Applied.** Recorded in `supabase_migrations.schema_migrations` (`20260730120000`); `db push` is a no-op after it.
 
 **Verified (2026-07-30):** `npm run typecheck` ✅, `npm run lint` ✅ (1 pre-existing React Compiler warning in `leads-table.tsx`), `npm test` ✅ **371/371**, `npm run verify:record` **14/14**, `npm run verify:cleanup` **20/20** (with `npm run redis:up`), `npm run verify:deploy` **17/17**, `npm run verify:leads-ui` **14/14** (dev server + Chrome; three Phase 16 drawer legs browser-verified). Purged re-record note event, missing-asset gate, screenshot path union, `bytesFreed` accumulation, lock-skip summary, cleanup trigger propagation, and drawer UX (dynamic retention copy, no Re-record in Recording section when purged) all covered.
 
@@ -1017,9 +1021,36 @@ The daily repeatable job (`Tech.md` §7.5): 30-day recording purge, inline + swe
 
 #### Phase 17 — Keep-alive and docs
 
-The GitHub Action (`Tech.md` §15) using an **insert-only anon key — never the service role key**, plus the fresh-Windows README.
+The GitHub Action (`docs/Tech.md` §15) using an **insert-only anon key — never the service role key**, plus the fresh-Windows README.
 
-**Exit:** the action inserts a heartbeat row on a manual dispatch. The service role key appears in no workflow file and no repository secret. A clean Windows machine reaches a running app from the README alone (**AC-5**).
+**Exit:**
+
+| Criterion | Verified by |
+|---|---|
+| A heartbeat row is inserted by a manual `workflow_dispatch` | *pending* — Actions run URL + service-role row delta |
+| The service role key appears in no workflow file and no repository secret | `verify:keepalive` O6/O9/O10; repository **secret list is a manual eyeball** — `gh` is not authenticated on this machine |
+| A clean Windows machine reaches a running app from the README alone (AC-5) | proxy-clone run (`c:\Users\natsu\Desktop\pz-ac5`) — see caveat rows |
+| **AC-5 caveat — not exercised by the proxy** | `npx supabase login` (machine-global token already present); Supabase project and Netlify site creation (browser); `npm run worker` (shared queue and database, destructive boot path); `npx supabase link` + `db push` (no link state in fresh clone — `db push` failed *"Cannot find project ref"* as documented) |
+| **AC-5 caveat — partial** | Demo campaign detail URL in README/`verify:shell` returns 404 — seeded campaign uses random UUID, not `00000000-…0001` (`Tech.md` §17 item 16). `/campaigns` list and all other shell routes returned 200. |
+| anon may INSERT `heartbeat` with `source='github-action'` | `verify:keepalive` N1 (201) |
+| anon may not SELECT / UPDATE / DELETE `heartbeat` | N2–N4, each asserting SQLSTATE `42501` |
+| anon may not write a different `source` | N5 (`WITH CHECK`, `42501`) |
+| anon may not list `lead-videos`; public reads still work | N6 + N7 (`Range: bytes=0-0`) |
+| anon may not reach `logs` or `campaign_leads` | N8, N9 — `42501` asserted specifically, not merely "an error" |
+| README and `docs/Tech.md` §16 name no npm script that does not exist | O7/O8 — **scope: renamed or deleted npm scripts only.** Would not have caught the missing `supabase link` step |
+| Offline legs run on a fresh clone with no `.env.local` | proxy run #1 — O1–O8 pass, O9/O10 skip loudly, exit 0 (`8/8 checks passed, 3 skipped`) |
+
+**Migrations:** none.
+
+**Verified:** *incomplete — awaiting manual `workflow_dispatch` and post-dispatch readings.*
+
+**Proxy-run (2026-08-01):** cold `npm install` + `npx playwright install chromium`; offline `verify:keepalive` ✅; `npm test` ✅ 371/371; `verify:imports` ✅; `npm run seed` ✅ (already seeded); `npm run dev` ✅; login ✅; full `verify:keepalive` ✅ 20/20; `verify:shell` 9/10 (demo campaign detail 404 — see caveat). Values hand-built from README locators using working-copy `.env.local` (dashboard navigation not re-validated). `LOCAL_STORAGE_ROOT=c:\Users\natsu\Desktop\pz-ac5-media`. `npm run redis:up` failed (Docker Desktop not running — no queue legs exercised).
+
+**Mutation summary (§2.9):** O1–O5 redden when asserted YAML lines are removed from fixture text; O6 reddens on a temp dir with a structurally valid fake service_role JWT; O7/O8 redden on synthetic docs naming `npm run does-not-exist`; O9 reddens when the service-role value appears in a temp tracked file; O10's pickaxe verified via `git log -S "heartbeat_insert_only"`; N1 reddens with a corrupted anon key; N2–N5/N8 redden when denial assertions are loosened; N9 reddens when `error !== null` replaces `42501` (service-role malformed insert returns `23502`/`23503`, not RLS).
+
+**Repository visibility:** unconfirmed (`gh` unauthenticated). A working run URL is not evidence the repo is public.
+
+**Proxy-run honesty:** Values in the AC-5 clone were sourced from the working copy's `.env.local`, not re-derived through dashboard navigation — README locator accuracy per variable was recorded at hand-build time. `npm run redis:up` starts the shared `pz-redis` container (not isolated). `npm run worker` was not run.
 
 ---
 

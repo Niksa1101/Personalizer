@@ -733,7 +733,7 @@ This is the **only** table reachable by a non-service key. The cron uses a narro
 
 Because the key has **no** `SELECT`, the insert must not ask for the row back. PostgREST has defaulted to `Prefer: return=minimal` on `POST` since v9, so the `Tech.md` §15 `curl` succeeds as written (verified: `201`), but the header is now sent explicitly there rather than relied upon.
 
-A weekly `DELETE FROM heartbeat WHERE created_at < now() - interval '90 days'` keeps it bounded — run from the same action, or left alone, since the row is tiny.
+A weekly `DELETE FROM heartbeat WHERE created_at < now() - interval '90 days'` keeps it bounded — documented in `README.md` § Keep-alive as manual SQL for an operator who wants it. **Nothing currently runs this delete** — not the GitHub Action, not a cron elsewhere.
 
 ---
 
