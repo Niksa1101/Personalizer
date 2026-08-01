@@ -1028,25 +1028,42 @@ The GitHub Action (`docs/Tech.md` §15) using an **insert-only anon key — neve
 | Criterion | Verified by |
 |---|---|
 | A heartbeat row is inserted by a manual `workflow_dispatch` | *pending* — Actions run URL + service-role row delta |
-| The service role key appears in no workflow file and no repository secret | `verify:keepalive` O6/O9/O10; repository **secret list is a manual eyeball** — `gh` is not authenticated on this machine |
+| The service role key appears in no workflow file and no repository secret | `verify:keepalive` O6/O9/O10 for the repository. For the **secret**, the workflow preflight decodes the JWT payload of `SUPABASE_ANON_KEY` and fails on a privileged role — O11 asserts that guard exists, N10 applies it to `.env.local`. The secret *list* is still a manual eyeball (`gh` unauthenticated), but a wrong key can no longer insert silently |
 | A clean Windows machine reaches a running app from the README alone (AC-5) | proxy-clone run (`c:\Users\natsu\Desktop\pz-ac5`) — see caveat rows |
 | **AC-5 caveat — not exercised by the proxy** | `npx supabase login` (machine-global token already present); Supabase project and Netlify site creation (browser); `npm run worker` (shared queue and database, destructive boot path); `npx supabase link` + `db push` (no link state in fresh clone — `db push` failed *"Cannot find project ref"* as documented) |
-| **AC-5 caveat — partial** | Demo campaign detail URL in README/`verify:shell` returns 404 — seeded campaign uses random UUID, not `00000000-…0001` (`Tech.md` §17 item 16). `/campaigns` list and all other shell routes returned 200. |
+| **AC-5 caveat — was partial, now closed** | The proxy run found the demo campaign detail URL 404ing in both README and `verify:shell` — the seeded campaign uses a random UUID, not `00000000-…0001`. `verify:shell` now resolves the id by slug and the README points at `/campaigns` (`Tech.md` §17 item 16). |
 | anon may INSERT `heartbeat` with `source='github-action'` | `verify:keepalive` N1 (201) |
-| anon may not SELECT / UPDATE / DELETE `heartbeat` | N2–N4, each asserting SQLSTATE `42501` |
+| anon may not SELECT / UPDATE / DELETE `heartbeat` | N2–N4, each asserting SQLSTATE `42501`. N3/N4 aim at `id = -1`, which cannot exist: the assertion is unchanged (PostgREST rejects on privilege before matching) but a regression can no longer rewrite and delete a real row on its way to being reported |
+| The key in use really is the anon key | N10 — decodes the JWT payload and asserts `role = anon`; skips for non-JWT `sb_publishable_*` keys. Every other N leg measures what the key can reach, which is the right question only once the key is the one we think it is |
 | anon may not write a different `source` | N5 (`WITH CHECK`, `42501`) |
-| anon may not list `lead-videos`; public reads still work | N6 + N7 (`Range: bytes=0-0`) |
+| anon may not list `lead-videos`; public reads still work | N6 + N7 (`Range: bytes=0-0`). N7 searches the first five prefixes for a real `final.mp4` and **skips** when it finds none — assuming the first entry holds one made the leg go red for prefixes holding only a `poster.jpg` |
 | anon may not reach `logs` or `campaign_leads` | N8, N9 — `42501` asserted specifically, not merely "an error" |
-| README and `docs/Tech.md` §16 name no npm script that does not exist | O7/O8 — **scope: renamed or deleted npm scripts only.** Would not have caught the missing `supabase link` step |
+| README and `docs/Tech.md` §16 name no npm script that does not exist | O7/O8 — **scope: renamed or deleted npm scripts only**, inside ` ```bash ` fences and inline `` `code` `` spans. Prose outside a code span, and non-bash fences (the §2 process diagram writes `(npm run dev)` in box-drawing characters), are not scanned. Would not have caught the missing `supabase link` step |
+| The workflow file is well-formed | **Not asserted locally.** O1–O5 and O11 are text assertions over the YAML, not a parse — no YAML parser is a dependency and none is being added for this. A syntax error passes all six and first surfaces in GitHub's Actions tab |
 | Offline legs run on a fresh clone with no `.env.local` | proxy run #1 — O1–O8 pass, O9/O10 skip loudly, exit 0 (`8/8 checks passed, 3 skipped`) |
 
 **Migrations:** none.
 
 **Verified:** *incomplete — awaiting manual `workflow_dispatch` and post-dispatch readings.*
 
+**Review remediation (2026-08-01):** `npm run typecheck` ✅, `npm run lint` ✅ (1 pre-existing React Compiler warning in `leads-table.tsx`), `npm test` ✅ **371/371**, `npm run verify:keepalive` ✅ **22/22** (O1–O11, N1–N10, teardown), offline `verify:keepalive` on a fresh-clone environment ✅ **9/9 + 3 skipped, exit 0**, `npm run verify:shell` ✅ **10/10** — the demo campaign detail route resolves and returns 200 for the first time. Skip paths exercised too: `verify:shell` without a service-role key reports **9 passed, 1 skipped, exit 0**.
+
 **Proxy-run (2026-08-01):** cold `npm install` + `npx playwright install chromium`; offline `verify:keepalive` ✅; `npm test` ✅ 371/371; `verify:imports` ✅; `npm run seed` ✅ (already seeded); `npm run dev` ✅; login ✅; full `verify:keepalive` ✅ 20/20; `verify:shell` 9/10 (demo campaign detail 404 — see caveat). Values hand-built from README locators using working-copy `.env.local` (dashboard navigation not re-validated). `LOCAL_STORAGE_ROOT=c:\Users\natsu\Desktop\pz-ac5-media`. `npm run redis:up` failed (Docker Desktop not running — no queue legs exercised).
 
-**Mutation summary (§2.9):** O1–O5 redden when asserted YAML lines are removed from fixture text; O6 reddens on a temp dir with a structurally valid fake service_role JWT; O7/O8 redden on synthetic docs naming `npm run does-not-exist`; O9 reddens when the service-role value appears in a temp tracked file; O10's pickaxe verified via `git log -S "heartbeat_insert_only"`; N1 reddens with a corrupted anon key; N2–N5/N8 redden when denial assertions are loosened; N9 reddens when `error !== null` replaces `42501` (service-role malformed insert returns `23502`/`23503`, not RLS).
+**Mutation summary.** O1–O5 redden when asserted YAML lines are removed from fixture text; O6 reddens on a temp dir with a structurally valid fake privileged JWT; O9 reddens when the service-role value appears in a temp tracked file; O10's pickaxe verified via `git log -S "heartbeat_insert_only"`; N1 reddens with a corrupted anon key; N2–N5/N8 redden when denial assertions are loosened.
+
+Re-verified 2026-08-01 for the legs added or changed in review remediation:
+
+| Leg | Mutation | Result |
+|---|---|---|
+| O11 | delete the preflight role-guard line from the workflow | `FAIL … preflight role guard not found`; restoring returns 9/9 |
+| N10 | anon key set to a fabricated JWT carrying the privileged role claim | `FAIL … role=service_role`. Fabricated rather than the real key on purpose — an unsigned token cannot authenticate, so the mutation proves the role check without letting a privileged key write to the project |
+| O7/O8 | `npm run does-not-exist` in **inline prose**, and as the second of two adjacent backticked cells | both reported. The previous cell-only scan returns `[]` for both — the gaps were real |
+| O7/O8 | `npm run verify:*` in prose, and `(npm run dev)` in an unfenced box diagram | neither reported — widening the scan introduces no false positives |
+| N3/N4 | retargeted from `id = 1` to `id = -1` | still `42501`, so the retarget did not make them vacuous: `postgrestCode(...) === "42501"` requires a non-null error, and a vacuous update would return none |
+| N7 | search for a filename present in no prefix | `SKIP … no final.mp4 under the first 5 prefix(es)`, and the run continues to N8/N9 — 21/21, 1 skipped |
+
+**N9 has no mutation evidence, deliberately recorded as such.** The earlier claim here — that `error !== null` in place of `42501` reddens it — does not hold. N9 runs as `anon`, where the malformed insert is rejected by privilege and returns `42501`, so the loose and the tight assertion both pass and the mutation discriminates nothing. The `23502`/`23503` it cited come from a *service-role* insert, which N9 never performs. The tighter assertion is still worth keeping (it is what separates "RLS denied this" from "the row was malformed"), but nothing here proves it does work the loose one would not.
 
 **Repository visibility:** unconfirmed (`gh` unauthenticated). A working run URL is not evidence the repo is public.
 

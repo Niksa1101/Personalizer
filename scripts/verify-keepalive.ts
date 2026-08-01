@@ -37,6 +37,13 @@ const repoRoot = join(import.meta.dirname, "..")
 
 const JWT_PATTERN = /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/g
 
+/**
+ * Row id the destructive denial probes (N3, N4) aim at. `heartbeat.id` is
+ * GENERATED ALWAYS AS IDENTITY starting at 1, so a negative id matches nothing
+ * and a regression that lets the write through destroys nothing.
+ */
+const UNREACHABLE_ID = -1
+
 function pass(name: string, detail = "ok"): void {
   results.push({ name, state: "pass", detail })
   console.log(`PASS  ${name}${detail === "ok" ? "" : ` — ${detail}`}`)
@@ -87,7 +94,13 @@ export function scanForServiceRole(files: { path: string; text: string }[]): Hit
   return hits
 }
 
-const NPM_BUILTINS = new Set(["test", "install", "ci"])
+/**
+ * A captured name that is a pattern rather than a script: `npm run verify:*`
+ * in prose, or a `<placeholder>` in a usage line. Scanning inline code spans
+ * reaches these where the old cell-only scan did not, and reporting them as
+ * drift would be a false positive against documentation that is correct.
+ */
+const PLACEHOLDER_CHARS = /[*<>…]/
 
 export function checkDocScriptDrift(
   text: string,
@@ -96,14 +109,25 @@ export function checkDocScriptDrift(
   const unknown: string[] = []
   const seen = new Set<string>()
 
-  const bashBlocks = text.matchAll(/```bash\n([\s\S]*?)```/g)
-  for (const block of bashBlocks) {
+  for (const block of text.matchAll(/```bash\n([\s\S]*?)```/g)) {
     scanCommandText(block[1]!, scriptNames, unknown, seen)
   }
 
-  const tableCells = text.matchAll(/\|\s*`([^`]+)`\s*\|/g)
-  for (const cell of tableCells) {
-    scanCommandText(cell[1]!, scriptNames, unknown, seen)
+  // Then every inline `code` span. A backticked table cell IS an inline span,
+  // so this subsumes the cell scan it replaces and closes both of that scan's
+  // gaps: commands in prose were invisible (`npm run verify:keepalive --
+  // --observe`, the command README § Keep-alive tells the operator to run
+  // periodically, went unchecked), and anchoring on the surrounding pipes
+  // consumed the trailing one, so the second of two adjacent backticked cells
+  // never matched.
+  //
+  // Fenced blocks are stripped first so a ``` marker cannot open a phantom
+  // span. Dropping non-bash fences is deliberate: the §2 process diagram in
+  // docs/Tech.md draws `(npm run dev)` inside a box, and scanning raw text
+  // would capture the script name as `dev)`.
+  const prose = text.replace(/```[\s\S]*?```/g, "")
+  for (const span of prose.matchAll(/`([^`\n]+)`/g)) {
+    scanCommandText(span[1]!, scriptNames, unknown, seen)
   }
 
   return unknown
@@ -116,20 +140,12 @@ function scanCommandText(
   seen: Set<string>,
 ): void {
   for (const match of text.matchAll(/npm run (\S+)/g)) {
-    const name = match[1]!.replace(/`/g, "")
+    const name = match[1]!.replace(/[`,.;:)\]]+$/, "")
+    if (!name || PLACEHOLDER_CHARS.test(name)) continue
     if (seen.has(name)) continue
     seen.add(name)
     if (!scriptNames.has(name)) {
       unknown.push(`npm run ${name}`)
-    }
-  }
-  for (const builtin of ["test", "install", "ci"] as const) {
-    const re = new RegExp(`\\bnpm ${builtin}\\b`)
-    if (re.test(text) && !seen.has(`npm ${builtin}`)) {
-      seen.add(`npm ${builtin}`)
-      if (!NPM_BUILTINS.has(builtin)) {
-        unknown.push(`npm ${builtin}`)
-      }
     }
   }
 }
@@ -156,7 +172,13 @@ function listGithubFiles(): { path: string; text: string }[] {
     }
   }
 
-  walk(dir)
+  // No .github/ at all is O1's failure to report, not this helper's. Throwing
+  // here would bury O1's FAIL under a raw ENOENT stack and lose the summary.
+  try {
+    walk(dir)
+  } catch {
+    return []
+  }
   return files
 }
 
@@ -260,6 +282,27 @@ function runOfflineLegs(scriptNames: Set<string>): void {
     pass("O5 workflow declares schedule and workflow_dispatch")
   } else {
     fail("O5 workflow declares schedule and workflow_dispatch", "trigger missing")
+  }
+
+  // mutation: delete the preflight role guard -> O11 fails
+  //
+  // O6/O9/O10 prove the privileged key is absent from this repository. None of
+  // them can see the repository *secret*, which is where the invariant is
+  // actually violated — the anon key and the privileged key sit on the same
+  // dashboard page. The workflow decodes the key it was handed and refuses a
+  // privileged role; this leg proves that guard is still in the file. The
+  // pattern is spelled with a wildcard because the workflow spells it that way
+  // — writing the literal identifier there would redden O6.
+  if (
+    /"role".*"service.role"/.test(workflowText) &&
+    workflowText.includes("base64 -d")
+  ) {
+    pass("O11 workflow rejects a privileged JWT in SUPABASE_ANON_KEY")
+  } else {
+    fail(
+      "O11 workflow rejects a privileged JWT in SUPABASE_ANON_KEY",
+      "preflight role guard not found",
+    )
   }
 
   // mutation: temp dir with fake service_role JWT -> O6 hits; clean dir -> no hits
@@ -381,13 +424,33 @@ async function runNetworkLegs(
     auth: { persistSession: false, autoRefreshToken: false },
   })
 
-  const { data: watermarkRow } = await service
+  // Teardown deletes by `id > watermark`, so a silently-failed watermark query
+  // would fall back to 0 and put every historical row in range. With N1 also
+  // failed and exactly one github-action row in the table, that deletes a real
+  // heartbeat. Track the failure and let teardown refuse instead.
+  const { data: watermarkRow, error: watermarkError } = await service
     .from("heartbeat")
     .select("id")
     .order("id", { ascending: false })
     .limit(1)
     .maybeSingle()
   const watermark = watermarkRow?.id ?? 0
+
+  // mutation: point NEXT_PUBLIC_SUPABASE_ANON_KEY at the privileged key -> N10 fails
+  //
+  // Every other network leg measures what the key *can reach*, which is the
+  // right question only once the key is the one we think it is. A privileged
+  // key would sail through N1 and turn N2–N9 red for the correct reason with
+  // the wrong diagnosis. Assert the role directly, and mirror the guard the
+  // workflow applies to the GitHub secret (O11).
+  const anonPayload = decodeJwtPayload(anonKey)
+  if (!anonPayload) {
+    skip("N10 anon key carries role=anon", "key is not a JWT — no role claim to read")
+  } else if (anonPayload.role === "anon") {
+    pass("N10 anon key carries role=anon")
+  } else {
+    fail("N10 anon key carries role=anon", `role=${String(anonPayload.role ?? "absent")}`)
+  }
 
   // mutation: corrupted anon key -> N1 fails
   const { error: insertError } = await anon
@@ -412,10 +475,16 @@ async function runNetworkLegs(
   }
 
   // mutation: assert success instead of denial -> N3 fails
+  //
+  // id -1 cannot exist. PostgREST rejects on the missing privilege before it
+  // matches anything, so the 42501 assertion is exactly as strong as it was
+  // against id 1 — but the case this leg exists to catch, a loosened grant or
+  // a permissive policy, no longer rewrites and then deletes a real heartbeat
+  // row on its way to reporting the failure.
   const { error: updateError } = await anon
     .from("heartbeat")
     .update({ source: "x" })
-    .eq("id", 1)
+    .eq("id", UNREACHABLE_ID)
   if (postgrestCode(updateError) === "42501") {
     pass("N3 anon UPDATE heartbeat -> 42501")
   } else {
@@ -426,7 +495,10 @@ async function runNetworkLegs(
   }
 
   // mutation: assert success instead of denial -> N4 fails
-  const { error: deleteError } = await anon.from("heartbeat").delete().eq("id", 1)
+  const { error: deleteError } = await anon
+    .from("heartbeat")
+    .delete()
+    .eq("id", UNREACHABLE_ID)
   if (postgrestCode(deleteError) === "42501") {
     pass("N4 anon DELETE heartbeat -> 42501")
   } else {
@@ -449,9 +521,11 @@ async function runNetworkLegs(
     )
   }
 
+  // More than one root entry, because N7 has to find a prefix that actually
+  // holds a final.mp4 — see below.
   const { data: bucketObjects, error: listServiceError } = await service.storage
     .from("lead-videos")
-    .list("", { limit: 1 })
+    .list("", { limit: 20 })
 
   if (listServiceError) {
     skip("N6 anon cannot list lead-videos", `service role list failed: ${listServiceError.message}`)
@@ -478,20 +552,44 @@ async function runNetworkLegs(
       )
     }
 
-    const samplePath = `${bucketObjects[0]!.name}/final.mp4`
-    const publicUrl = `${supabaseUrl.replace(/\/$/, "")}/storage/v1/object/public/lead-videos/${samplePath}`
-    try {
-      const response = await fetch(publicUrl, { headers: { Range: "bytes=0-0" } })
-      if (response.status === 200 || response.status === 206) {
-        pass("N7 public object readable via Range: bytes=0-0", `HTTP ${response.status}`)
-      } else {
-        fail("N7 public object readable via Range: bytes=0-0", `HTTP ${response.status}`)
+    // Assuming the first root entry holds a final.mp4 is not safe.
+    // `uploadPosterImage()` reserves its own key and can leave a prefix
+    // containing only poster.jpg (worker/video/upload.ts), and a dashboard
+    // click leaves .emptyFolderPlaceholder. Either one turned N7 into a 400
+    // reported as "public reads are broken" — a red leg for a reason that has
+    // nothing to do with what it asserts. Look for a real object instead, and
+    // skip loudly when the bucket holds none.
+    let samplePath: string | null = null
+    for (const entry of bucketObjects.slice(0, 5)) {
+      const { data: inner } = await service.storage
+        .from("lead-videos")
+        .list(entry.name, { limit: 100 })
+      if (inner?.some((object) => object.name === "final.mp4")) {
+        samplePath = `${entry.name}/final.mp4`
+        break
       }
-    } catch (error) {
-      fail(
+    }
+
+    if (!samplePath) {
+      skip(
         "N7 public object readable via Range: bytes=0-0",
-        error instanceof Error ? error.message : String(error),
+        `no final.mp4 under the first ${Math.min(bucketObjects.length, 5)} prefix(es) — run a deploy first`,
       )
+    } else {
+      const publicUrl = `${supabaseUrl.replace(/\/$/, "")}/storage/v1/object/public/lead-videos/${samplePath}`
+      try {
+        const response = await fetch(publicUrl, { headers: { Range: "bytes=0-0" } })
+        if (response.status === 200 || response.status === 206) {
+          pass("N7 public object readable via Range: bytes=0-0", `HTTP ${response.status}`)
+        } else {
+          fail("N7 public object readable via Range: bytes=0-0", `HTTP ${response.status}`)
+        }
+      } catch (error) {
+        fail(
+          "N7 public object readable via Range: bytes=0-0",
+          error instanceof Error ? error.message : String(error),
+        )
+      }
     }
   }
 
@@ -525,6 +623,16 @@ async function runNetworkLegs(
     )
   }
 
+  // Every teardown path records a result — pass, fail or skip. Previously the
+  // two abandon paths only wrote to the console, so the summary denominator
+  // moved between runs and "20/20" was not a fixed number to hold the phase to.
+  const TEARDOWN = "teardown removed this run's heartbeat row"
+
+  if (watermarkError) {
+    skip(TEARDOWN, `watermark query failed (${watermarkError.message}) — refusing to guess a range`)
+    return
+  }
+
   const { data: candidates, error: candidatesError } = await service
     .from("heartbeat")
     .select("id")
@@ -534,12 +642,12 @@ async function runNetworkLegs(
     .limit(2)
 
   if (candidatesError) {
-    fail("teardown candidate query", candidatesError.message)
+    fail(TEARDOWN, `candidate query failed: ${candidatesError.message}`)
     return
   }
 
   if (!candidates || candidates.length === 0) {
-    console.log("TEARDOWN nothing to delete — N1 may have failed")
+    skip(TEARDOWN, "nothing above the watermark — N1 may have failed")
     return
   }
 
@@ -547,15 +655,16 @@ async function runNetworkLegs(
     const id = candidates[0]!.id
     const { error: teardownError } = await service.from("heartbeat").delete().eq("id", id)
     if (teardownError) {
-      fail("teardown delete single row", teardownError.message)
+      fail(TEARDOWN, teardownError.message)
     } else {
-      pass("teardown deleted one row", `id=${id}`)
+      pass(TEARDOWN, `id=${id}`)
     }
     return
   }
 
-  console.log(
-    "TEARDOWN skipped — >=2 candidate rows (concurrent Action row may be present); leaving this run's row behind",
+  skip(
+    TEARDOWN,
+    ">=2 candidate rows (a concurrent Action row may be present); leaving this run's row behind",
   )
 }
 
@@ -602,7 +711,7 @@ async function main(): Promise<void> {
 
   if (networkMissing.length > 0) {
     skip(
-      "network legs N1–N9",
+      "network legs N1–N10",
       `missing or placeholder: ${networkMissing.join(", ")}`,
     )
   } else {

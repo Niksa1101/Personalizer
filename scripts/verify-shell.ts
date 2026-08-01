@@ -3,7 +3,10 @@
  * Does not start the server — fails loudly if nothing is listening.
  */
 
+import { createClient } from "@supabase/supabase-js"
+
 import { ERROR_BOUNDARY_MARKER } from "../app/(app)/error"
+import type { Database } from "../lib/database.types"
 
 const BASE_URL = "http://127.0.0.1:3000"
 
@@ -16,13 +19,13 @@ const ROUTES = [
   "/import",
   "/logs",
   "/settings",
-  "/campaigns/00000000-0000-0000-0000-000000000001",
 ] as const
 
 interface CheckResult {
   name: string
   ok: boolean
   detail: string
+  skipped?: boolean
 }
 
 const results: CheckResult[] = []
@@ -35,6 +38,57 @@ function pass(name: string, detail = "ok"): void {
 function fail(name: string, detail: string): void {
   results.push({ name, ok: false, detail })
   console.error(`FAIL  ${name} — ${detail}`)
+}
+
+function skip(name: string, reason: string): void {
+  results.push({ name, ok: true, detail: reason, skipped: true })
+  console.log(`SKIP  ${name} — ${reason}`)
+}
+
+/**
+ * The one dynamic route in the set. It used to be a hardcoded
+ * `/campaigns/00000000-…0001`, which never existed: `seed_demo_data()` inserts
+ * the demo campaign with `gen_random_uuid()` and pins only the slug. The leg
+ * had been quietly red since Phase 3 and the README repeated the dead URL.
+ *
+ * Resolved through the database rather than by scraping `/campaigns`, because
+ * the campaigns table renders its only `/campaigns/<id>` link inside a
+ * dropdown that Base UI portals in on open — the id is not in the server HTML.
+ * `createClient` directly, not `getSupabaseAdmin()`: `verify:shell` runs
+ * without `--conditions react-server` and importing the server-only module
+ * would throw.
+ */
+async function resolveDemoCampaignRoute(): Promise<
+  { route: string } | { skipReason: string }
+> {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim()
+  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim()
+
+  if (!url || !serviceRoleKey) {
+    return {
+      skipReason:
+        "NEXT_PUBLIC_SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY is unset — cannot resolve the demo campaign id",
+    }
+  }
+
+  const supabase = createClient<Database>(url, serviceRoleKey, {
+    auth: { persistSession: false, autoRefreshToken: false },
+  })
+
+  const { data, error } = await supabase
+    .from("campaigns")
+    .select("id")
+    .eq("slug", "demo")
+    .maybeSingle()
+
+  if (error) {
+    return { skipReason: `campaign lookup failed: ${error.message}` }
+  }
+  if (!data) {
+    return { skipReason: "no campaign with slug 'demo' — run `npm run seed`" }
+  }
+
+  return { route: `/campaigns/${data.id}` }
 }
 
 async function probeServer(): Promise<boolean> {
@@ -111,7 +165,15 @@ async function main(): Promise<void> {
 
   const cookieHeader = `pz_session=${sessionCookie}`
 
-  for (const route of ROUTES) {
+  const demo = await resolveDemoCampaignRoute()
+  const routes: string[] = [...ROUTES]
+  if ("route" in demo) {
+    routes.push(demo.route)
+  } else {
+    skip("GET /campaigns/<demo campaign>", demo.skipReason)
+  }
+
+  for (const route of routes) {
     const response = await fetch(`${BASE_URL}${route}`, {
       redirect: "manual",
       headers: { Cookie: cookieHeader },
@@ -132,10 +194,14 @@ async function main(): Promise<void> {
   }
 
   const failed = results.filter((result) => !result.ok)
-  const passed = results.filter((result) => result.ok)
+  const skipped = results.filter((result) => result.skipped)
+  const passed = results.filter((result) => result.ok && !result.skipped)
 
   console.log("")
-  console.log(`Summary: ${passed.length} passed, ${failed.length} failed`)
+  console.log(
+    `Summary: ${passed.length} passed, ${failed.length} failed` +
+      (skipped.length > 0 ? `, ${skipped.length} skipped` : ""),
+  )
 
   if (failed.length > 0) {
     process.exit(1)
