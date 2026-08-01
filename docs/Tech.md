@@ -847,108 +847,7 @@ Also **do not enable `cacheComponents`** (the PPR successor). Every screen in th
 
 Supabase pauses inactive free-tier projects. A GitHub Actions cron writes one row daily. **README is canonical for the operator-facing walkthrough** — secrets, dispatch, silent-death traps, and manual prune SQL.
 
-```yaml
-name: supabase-keepalive
-
-# Writes one row to public.heartbeat so Supabase does not pause this free-tier
-# project for inactivity. Spec: docs/Tech.md §15, docs/DB.md §5.13 and §7.3.
-#
-# SUPABASE_ANON_KEY is the project's anon key, constrained by the insert-only
-# RLS policy on `heartbeat` (no SELECT, no UPDATE, no DELETE, and
-# WITH CHECK (source = 'github-action')). The SERVICE ROLE KEY MUST NEVER be
-# used here or stored as a repository secret — it bypasses RLS on every table,
-# and a leak there is total exposure of every lead.
-#
-# The secret names deliberately differ from .env.local's NEXT_PUBLIC_* names:
-# different key, different trust boundary. See README.md § Keep-alive.
-
-on:
-  schedule:
-    - cron: '17 6 * * *'
-  workflow_dispatch:
-
-permissions: {}
-
-jobs:
-  ping:
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - name: Check secrets are present and well-formed
-        env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
-        run: |
-          missing=0
-          if [ -z "$SUPABASE_URL" ]; then
-            echo "::error::Repository secret SUPABASE_URL is empty or unset."
-            missing=1
-          fi
-          if [ -z "$SUPABASE_ANON_KEY" ]; then
-            echo "::error::Repository secret SUPABASE_ANON_KEY is empty or unset."
-            missing=1
-          fi
-          if [ "$missing" -ne 0 ]; then
-            echo "::error::See README.md section 'Keep-alive' for how to create both secrets."
-            exit 1
-          fi
-          case "$SUPABASE_URL" in
-            https://*.supabase.co) ;;
-            *)
-              echo "::error::SUPABASE_URL must look like https://<project-ref>.supabase.co. Do not use the dashboard URL."
-              exit 1
-              ;;
-          esac
-
-      - name: Insert heartbeat row
-        env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
-        run: |
-          rc=0
-          code=$(curl -sS \
-            --fail-with-body \
-            --retry 3 --retry-delay 10 \
-            --connect-timeout 10 --max-time 30 \
-            -o /tmp/keepalive-body.txt \
-            -w '%{http_code}' \
-            -X POST "$SUPABASE_URL/rest/v1/heartbeat" \
-            -H "apikey: $SUPABASE_ANON_KEY" \
-            -H "Authorization: Bearer $SUPABASE_ANON_KEY" \
-            -H "Content-Type: application/json" \
-            -H "Prefer: return=minimal" \
-            -d '{"source":"github-action"}') || rc=$?
-
-          echo "HTTP_CODE=$code" >> "$GITHUB_ENV"
-          echo "CURL_RC=$rc" >> "$GITHUB_ENV"
-
-          if [ "$rc" -ne 0 ] || [ "$code" != "201" ]; then
-            echo "::error::heartbeat insert failed (curl exit $rc, HTTP $code)"
-            exit 1
-          fi
-          echo "heartbeat row inserted (HTTP 201)"
-
-      - name: Diagnose failure
-        if: failure()
-        env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-        run: |
-          host=$(printf '%s' "$SUPABASE_URL" | sed -E 's#^https?://([^/]+).*#\1#')
-          echo "host:      ${host:-<unset>}"
-          echo "http code: ${HTTP_CODE:-<none>}"
-          echo "curl exit: ${CURL_RC:-<none>}"
-          echo "response body:"
-          cat /tmp/keepalive-body.txt 2>/dev/null || echo "  <no body captured>"
-          echo ""
-          echo "Triage, most likely first:"
-          echo "  1. The Supabase project is PAUSED. Unpause it in the dashboard, then re-run this workflow."
-          echo "  2. SUPABASE_ANON_KEY was rotated, or the legacy JWT key was disabled during a"
-          echo "     migration to publishable keys. Update the repository secret."
-          echo "  3. The heartbeat_insert_only RLS policy changed. The response body above names"
-          echo "     the rejecting policy."
-          echo "  4. SUPABASE_URL points at the wrong project."
-          echo "See README.md section 'Keep-alive'."
-```
+The shipped workflow is `.github/workflows/supabase-keepalive.yml` — **read it there, not here.** This section used to inline a copy of the YAML. The copy had already drifted (it lost every explanatory comment) and nothing checked it, so what follows is the reasoning only; the file is the sole source of what the workflow does.
 
 `--fail-with-body` (curl 7.76+) writes PostgREST's error JSON to the body file on ≥400 responses, so the diagnose step can name the rejecting RLS policy. Without it, a failed insert leaves no response body to read.
 
@@ -957,6 +856,8 @@ jobs:
 The workflow asserts HTTP **201** explicitly — `--fail` alone cannot distinguish "inserted" from "some other 2xx". Preflight checks reject empty secrets and dashboard URLs (which 404 in a way that reads as "project paused"). `permissions: {}` follows least privilege; `timeout-minutes: 5` bounds a job that should finish in seconds.
 
 **The service role key must never enter GitHub secrets.** It bypasses RLS on every table (`DB.md` §7); a leak there is total exposure of every lead. The anon key used here is constrained by the insert-only policy on `heartbeat` (`DB.md` §7.3) — no `SELECT`, no `UPDATE`, no `DELETE`, and `WITH CHECK (source = 'github-action')` pins even what it can write. Worst case, someone adds rows to a table whose only purpose is to be written to.
+
+**That rule is asserted, not trusted.** The preflight step base64-decodes the JWT payload of `SUPABASE_ANON_KEY` and fails the run if the role claim is the privileged one. This is the only place the invariant can actually be broken — both keys sit on the same dashboard page, and pasting the wrong one is silent: the insert would simply succeed. `verify:keepalive` O11 asserts the guard is still in the workflow, and N10 applies the same check to the key in `.env.local`. Keys that are not JWTs (`sb_publishable_*`) carry no role claim and pass through unexamined.
 
 That bound is now real rather than aspirational: `DB.md` §8.1 removed a storage policy that would have let this same key list every video in the bucket, and §7.1.1 revoked the table privileges Supabase grants `anon` by default. Both were found by measuring what the key could actually do — `npm run verify:keepalive` re-measures on every run.
 
@@ -1131,8 +1032,8 @@ Run `npm run verify:record` after installing Chromium to exercise the hermetic f
 12. ~~**In-drawer video playback is unverified by anything automated**~~ — **closed 2026-07-29.** `verify:leads-ui` generates a real H.264+AAC fixture with `ffmpeg-static` (same codec settings as the pipeline) and asserts both drawer `<video>` elements decode a frame and advance `currentTime` in Google Chrome (`channel: "chrome"`). Bundled Chromium cannot decode H.264 — see §16.2.
 13. **Heartbeat retention** — the 90-day `DELETE` is documented in `README.md` § Keep-alive but nothing runs it automatically.
 14. **CI workflow** (typecheck/lint/test on every push) — deliberately deferred out of Phase 17.
-15. **The `schedule` trigger on supabase-keepalive** — unobserved until it first fires; only `workflow_dispatch` was exercised in Phase 17.
-16. **README / `verify:shell` demo campaign URL** — `scripts/verify-shell.ts:19` and `README.md` Quickstart reference `/campaigns/00000000-0000-0000-0000-000000000001`, but `seed_demo_data()` inserts the demo campaign with `gen_random_uuid()` (slug `demo`). AC-5 proxy run: `/campaigns` returns 200; the hardcoded detail URL returns 404. Operator should open the demo from `/campaigns` until the seed function pins a stable id or the docs reference slug-based navigation.
+15. **The `schedule` trigger on supabase-keepalive** — unobserved until it first fires. `workflow_dispatch` is the only trigger Phase 17 will exercise; the cron proves itself a day later or not at all, which is what risk 10 is about.
+16. ~~**README / `verify:shell` demo campaign URL**~~ — **resolved.** Both referenced `/campaigns/00000000-…0001`, which `seed_demo_data()` never creates (it inserts with `gen_random_uuid()` and pins only the slug `demo`), so the leg had been quietly red since Phase 3 and the README repeated the dead URL. `verify-shell.ts` now resolves the id by slug through the service role; the README sends the operator to `/campaigns`. Resolved by lookup rather than by scraping the list page because the only `/campaigns/<id>` link lives inside a Base UI dropdown that portals in on open — it is not in the server HTML.
 
 ---
 

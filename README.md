@@ -30,7 +30,7 @@ npm test
 npm run verify:imports
 npm run seed
 npm run dev                       # http://127.0.0.1:3000
-# sign in with APP_PASSWORD, load /campaigns/00000000-0000-0000-0000-000000000001
+# sign in with APP_PASSWORD, open /campaigns and click into the demo campaign
 npm run verify:keepalive          # full set including network legs
 npm run worker                    # not exercised by the validation run — see Troubleshooting #14
 ```
@@ -106,7 +106,7 @@ npm run dev         # http://127.0.0.1:3000
 npm run worker      # second terminal — one instance only; see Troubleshooting #14
 ```
 
-On first run, campaigns default to dry-run deploy posture until you change settings. The demo campaign (`npm run seed`) is at `/campaigns/00000000-0000-0000-0000-000000000001`.
+On first run, campaigns default to dry-run deploy posture until you change settings. `npm run seed` creates a demo campaign with slug `demo`; open it from `/campaigns`. Its id is generated at seed time, so there is no stable URL to bookmark.
 
 Install Playwright Chromium once: `npm run setup:browser` (or `npx playwright install chromium`).
 

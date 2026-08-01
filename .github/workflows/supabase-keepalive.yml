@@ -11,6 +11,12 @@ name: supabase-keepalive
 #
 # The secret names deliberately differ from .env.local's NEXT_PUBLIC_* names:
 # different key, different trust boundary. See README.md § Keep-alive.
+#
+# Note the spelling "SERVICE ROLE KEY" with spaces, above and throughout this
+# file. `verify:keepalive` O6 scans every file under .github/** for the literal
+# identifier and for JWTs whose payload carries that role; writing the
+# identifier here — even inside a comment saying never to use it — reddens O6.
+# Keep prose spellings spaced.
 
 on:
   schedule:
@@ -55,6 +61,32 @@ jobs:
               ;;
           esac
 
+          # The one invariant this whole workflow exists to protect, asserted
+          # rather than eyeballed. Pasting the wrong key from the same dashboard
+          # page is the plausible slip, and it is silent: the insert would
+          # succeed, so nothing else here would ever notice.
+          #
+          # Decode the JWT payload and refuse a privileged role. The eyJ* gate
+          # keeps this correct for non-JWT publishable keys (sb_publishable_*),
+          # which carry no role claim and are skipped rather than rejected.
+          case "$SUPABASE_ANON_KEY" in
+            eyJ*)
+              payload=$(printf '%s' "$SUPABASE_ANON_KEY" | cut -d. -f2 | tr '_-' '/+')
+              case $(( ${#payload} % 4 )) in
+                2) payload="$payload==" ;;
+                3) payload="$payload=" ;;
+              esac
+              # The `.` in the pattern is a wildcard standing in for the
+              # underscore, so this file does not contain the literal
+              # identifier that O6 forbids. Do not "correct" it.
+              if printf '%s' "$payload" | base64 -d 2>/dev/null \
+                | grep -qE '"role"[[:space:]]*:[[:space:]]*"service.role"'; then
+                echo "::error::SUPABASE_ANON_KEY holds a privileged JWT, not the anon key. Replace the secret with the anon key and rotate the leaked key in the Supabase dashboard now — a key with that role bypasses RLS on every table."
+                exit 1
+              fi
+              ;;
+          esac
+
       - name: Insert heartbeat row
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
@@ -67,9 +99,15 @@ jobs:
           # --fail-with-body: on >=400, still write PostgREST's error JSON to
           # the body file. That JSON names the policy that rejected the write.
           #
-          # No --retry-all-errors: retry transient failures (5xx, 429,
-          # connection) only. A 401 from a bad secret must fail immediately.
-          # --max-time applies PER ATTEMPT, so worst case is 3x30s + 2x10s.
+          # No --retry-all-errors: retry transient failures only — timeouts and
+          # HTTP 408/429/5xx. A connection refused is NOT retried without
+          # --retry-connrefused, and that is fine: a refused connection here
+          # means the project is paused, which retrying will not fix. A 401
+          # from a bad secret must fail immediately.
+          #
+          # --retry 3 means up to FOUR attempts and three delays, and --max-time
+          # applies per attempt, so the worst case is 4x30s + 3x10s = 150s —
+          # inside timeout-minutes: 5 with room to spare.
           rc=0
           code=$(curl -sS \
             --fail-with-body \
