@@ -1019,7 +1019,7 @@ The daily repeatable job (`Tech.md` §7.5): 30-day recording purge, inline + swe
 
 ---
 
-#### Phase 17 — Keep-alive and docs
+#### Phase 17 — Keep-alive and docs ✅ **DONE** (2026-08-01)
 
 The GitHub Action (`docs/Tech.md` §15) using an **insert-only anon key — never the service role key**, plus the fresh-Windows README.
 
@@ -1027,7 +1027,7 @@ The GitHub Action (`docs/Tech.md` §15) using an **insert-only anon key — neve
 
 | Criterion | Verified by |
 |---|---|
-| A heartbeat row is inserted by a manual `workflow_dispatch` | *pending* — Actions run URL + service-role row delta |
+| A heartbeat row is inserted by a manual `workflow_dispatch` | ✅ `supabase-keepalive` run **#1**, manual dispatch on `master`, 2026-08-01, green in 13s. Confirmed independently by service-role row delta, not by the green check: `count(*)` **1 → 2**, `max(id)` **1 → 15**, `max(created_at)` **2026-07-21T10:49:46Z → 2026-08-01T12:30:45Z**. The id gap is the identity sequence burning values on inserts that `verify:keepalive` rolled back and tore down |
 | The service role key appears in no workflow file and no repository secret | `verify:keepalive` O6/O9/O10 for the repository. For the **secret**, the workflow preflight decodes the JWT payload of `SUPABASE_ANON_KEY` and fails on a privileged role — O11 asserts that guard exists, N10 applies it to `.env.local`. The secret *list* is still a manual eyeball (`gh` unauthenticated), but a wrong key can no longer insert silently |
 | A clean Windows machine reaches a running app from the README alone (AC-5) | proxy-clone run (`c:\Users\natsu\Desktop\pz-ac5`) — see caveat rows |
 | **AC-5 caveat — not exercised by the proxy** | `npx supabase login` (machine-global token already present); Supabase project and Netlify site creation (browser); `npm run worker` (shared queue and database, destructive boot path); `npx supabase link` + `db push` (no link state in fresh clone — `db push` failed *"Cannot find project ref"* as documented) |
@@ -1039,12 +1039,12 @@ The GitHub Action (`docs/Tech.md` §15) using an **insert-only anon key — neve
 | anon may not list `lead-videos`; public reads still work | N6 + N7 (`Range: bytes=0-0`). N7 searches the first five prefixes for a real `final.mp4` and **skips** when it finds none — assuming the first entry holds one made the leg go red for prefixes holding only a `poster.jpg` |
 | anon may not reach `logs` or `campaign_leads` | N8, N9 — `42501` asserted specifically, not merely "an error" |
 | README and `docs/Tech.md` §16 name no npm script that does not exist | O7/O8 — **scope: renamed or deleted npm scripts only**, inside ` ```bash ` fences and inline `` `code` `` spans. Prose outside a code span, and non-bash fences (the §2 process diagram writes `(npm run dev)` in box-drawing characters), are not scanned. Would not have caught the missing `supabase link` step |
-| The workflow file is well-formed | **Not asserted locally.** O1–O5 and O11 are text assertions over the YAML, not a parse — no YAML parser is a dependency and none is being added for this. A syntax error passes all six and first surfaces in GitHub's Actions tab |
+| The workflow file is well-formed | **Not asserted locally.** O1–O5 and O11 are text assertions over the YAML, not a parse — no YAML parser is a dependency and none is being added for this. A syntax error passes all six and first surfaces in GitHub's Actions tab, which is where it was confirmed: `supabase-keepalive` appears in the workflow sidebar |
 | Offline legs run on a fresh clone with no `.env.local` | proxy run #1 — O1–O8 pass, O9/O10 skip loudly, exit 0 (`8/8 checks passed, 3 skipped`) |
 
 **Migrations:** none.
 
-**Verified:** *incomplete — awaiting manual `workflow_dispatch` and post-dispatch readings.*
+**Verified (2026-08-01):** `npm run typecheck` ✅, `npm run lint` ✅ (1 pre-existing React Compiler warning in `leads-table.tsx`), `npm test` ✅ **371/371**, `npm run verify:keepalive` ✅ **22/22**, offline `verify:keepalive` ✅ **9/9 + 3 skipped, exit 0**, `npm run verify:shell` ✅ **10/10**, manual `workflow_dispatch` ✅ green with the row delta confirmed through the service role.
 
 **Review remediation (2026-08-01):** `npm run typecheck` ✅, `npm run lint` ✅ (1 pre-existing React Compiler warning in `leads-table.tsx`), `npm test` ✅ **371/371**, `npm run verify:keepalive` ✅ **22/22** (O1–O11, N1–N10, teardown), offline `verify:keepalive` on a fresh-clone environment ✅ **9/9 + 3 skipped, exit 0**, `npm run verify:shell` ✅ **10/10** — the demo campaign detail route resolves and returns 200 for the first time. Skip paths exercised too: `verify:shell` without a service-role key reports **9 passed, 1 skipped, exit 0**.
 
@@ -1065,7 +1065,7 @@ Re-verified 2026-08-01 for the legs added or changed in review remediation:
 
 **N9 has no mutation evidence, deliberately recorded as such.** The earlier claim here — that `error !== null` in place of `42501` reddens it — does not hold. N9 runs as `anon`, where the malformed insert is rejected by privilege and returns `42501`, so the loose and the tight assertion both pass and the mutation discriminates nothing. The `23502`/`23503` it cited come from a *service-role* insert, which N9 never performs. The tighter assertion is still worth keeping (it is what separates "RLS denied this" from "the row was malformed"), but nothing here proves it does work the loose one would not.
 
-**Repository visibility:** unconfirmed (`gh` unauthenticated). A working run URL is not evidence the repo is public.
+**Repository visibility: private.** Confirmed 2026-08-01 — `git push` to `origin/master` succeeds while the unauthenticated GitHub API returns *Not Found* for the repo, which is only consistent with a private repo. Scheduled workflows run normally on private repos; the difference is that Actions minutes are metered rather than free. `gh` remains unauthenticated on this machine, so the **secret list** is still a manual eyeball — but the preflight role guard means a wrong key fails the run instead of inserting silently.
 
 **Proxy-run honesty:** Values in the AC-5 clone were sourced from the working copy's `.env.local`, not re-derived through dashboard navigation — README locator accuracy per variable was recorded at hand-build time. `npm run redis:up` starts the shared `pz-redis` container (not isolated). `npm run worker` was not run.
 
