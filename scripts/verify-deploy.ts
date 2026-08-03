@@ -224,6 +224,7 @@ async function deployManifest(
   client: NetlifyClient,
   manifest: ManifestBuildResult,
   title: string,
+  ownershipCachedPaths?: readonly string[] | null,
 ): Promise<PublishManifestResult> {
   return publishManifest({
     manifest,
@@ -231,6 +232,7 @@ async function deployManifest(
     title,
     client,
     budgetMs: DEPLOY_BUDGET_MS,
+    ownershipCachedPaths,
   })
 }
 
@@ -410,7 +412,37 @@ async function runHermeticLeg(): Promise<void> {
     const pageA = manifestPage("/verify/a", fixturePageHtml("page A"))
     const pageB = manifestPage("/verify/b", fixturePageHtml("page B"))
     const initial = buildManifest({ pages: [pageA, pageB], retained: [] })
-    await deployManifest(client, initial, "verify initial")
+    await deployManifest(client, initial, "verify initial", null)
+    const ownershipWarm: readonly string[] = Object.keys(initial.files)
+
+    // Ownership guard — cold cache with a foreign path must refuse.
+    fake.plantSiteFile("/assets/planted-foreign.js")
+    let ownershipOutcome: "pass" | "fail" | "skip" = "fail"
+    try {
+      await deployManifest(
+        client,
+        buildManifest({ pages: [pageA], retained: [] }),
+        "verify ownership refusal",
+        null,
+      )
+    } catch (error) {
+      if (error instanceof Error && error.name === "SiteOwnershipError") {
+        ownershipOutcome = "pass"
+      } else if (/fetch failed/i.test(error instanceof Error ? error.message : String(error))) {
+        ownershipOutcome = "skip"
+      }
+    }
+    fake.removeSiteFile("/assets/planted-foreign.js")
+    if (ownershipOutcome === "pass") {
+      pass("ownership guard refuses foreign path on cold cache")
+    } else if (ownershipOutcome === "skip") {
+      console.log(
+        "SKIP  ownership guard refuses foreign path on cold cache — Supabase unavailable for listOwnedSitePaths",
+      )
+    } else {
+      fail("ownership guard refuses foreign path on cold cache", "deploy succeeded")
+    }
+
     const livePaths = fake.getSiteFiles().map((file) => file.path).sort()
     if (
       livePaths.includes("/verify/a/index.html") &&
@@ -422,7 +454,7 @@ async function runHermeticLeg(): Promise<void> {
     }
 
     const trimmed = buildManifest({ pages: [pageA], retained: [] })
-    await deployManifest(client, trimmed, "verify unpublish")
+    await deployManifest(client, trimmed, "verify unpublish", ownershipWarm)
     const afterUnpublish = fake.getSiteFiles().map((file) => file.path)
     if (
       afterUnpublish.includes("/verify/a/index.html") &&
@@ -443,6 +475,7 @@ async function runHermeticLeg(): Promise<void> {
       client,
       buildManifest({ pages: batchPages, retained: [] }),
       "verify batch seed",
+      ownershipWarm,
     )
 
     fake.resetPutCount()
@@ -453,6 +486,7 @@ async function runHermeticLeg(): Promise<void> {
       client,
       buildManifest({ pages: changedPages, retained: [] }),
       "verify one change",
+      ownershipWarm,
     )
     if (fake.putCount === 1 && changed.uploadedCount === 1) {
       pass(
@@ -481,6 +515,7 @@ async function runHermeticLeg(): Promise<void> {
       client,
       twinManifest,
       "verify duplicate digests",
+      ownershipWarm,
     )
     if (fake.putCount === 2 && twins.requiredCount === 1) {
       pass("D34 duplicate digest uploads once per path", "2 PUTs, 1 digest")

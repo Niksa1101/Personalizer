@@ -22,6 +22,10 @@ import {
   isDeployDirty,
   CLEANUP_QUEUE_NAME,
   PIPELINE_QUEUE_NAME,
+  acquireBootMutex,
+  LIVENESS_TTL_SECONDS,
+  releaseBootMutex,
+  scanLiveWorkers,
   registerLiveness,
   setSiteSyncLastResult,
   SITE_SYNC_QUEUE_NAME,
@@ -46,8 +50,53 @@ import {
   runCleanupJob,
 } from "./cleanup/job"
 import { getCleanupLastRun } from "@/lib/cleanup-state"
+import { writeWorkerLog } from "./db"
 
 const SHUTDOWN_DRAIN_MS = 30_000
+
+/**
+ * §17 item 11. Refuses to boot while another worker is live. No --force: a hard-killed
+ * worker's liveness key expires within LIVENESS_TTL_SECONDS, so waiting is always
+ * sufficient, and a flag would only ever override a *live* worker — the exact thing
+ * being prevented.
+ */
+async function acquireWorkerSlot(workerId: string): Promise<void> {
+  if (process.env.PZ_ALLOW_MULTIPLE_WORKERS === "1") {
+    console.warn(
+      "[worker] PZ_ALLOW_MULTIPLE_WORKERS=1 — single-worker lock BYPASSED (test harness only)",
+    )
+    await registerLiveness(workerId)
+    return
+  }
+
+  const gotMutex = await acquireBootMutex()
+  if (!gotMutex) {
+    console.error("[worker] another worker is booting right now — refusing to start")
+    await closeQueueConnections()
+    process.exit(1)
+  }
+
+  const live = await scanLiveWorkers()
+  if (live.length > 0) {
+    await writeWorkerLog({
+      level: "error",
+      message: "Worker boot refused — another worker is already live",
+      meta: { worker_id: workerId, live_workers: live },
+    }).catch(() => {})
+    console.error(
+      `[worker] refusing to start: ${live.length} live worker(s) already registered: ${live.join(", ")}`,
+    )
+    console.error(
+      `[worker] if one was just hard-killed, its key expires within ${LIVENESS_TTL_SECONDS}s — wait, then retry.`,
+    )
+    await releaseBootMutex()
+    await closeQueueConnections()
+    process.exit(1)
+  }
+
+  await registerLiveness(workerId)
+  await releaseBootMutex()
+}
 
 async function main(): Promise<void> {
   assertEnvOrExit()
@@ -55,7 +104,7 @@ async function main(): Promise<void> {
   const workerId = `${hostname()}:${process.pid}`
   console.log(`[worker] starting (${workerId})`)
 
-  await registerLiveness(workerId)
+  await acquireWorkerSlot(workerId)
 
   // Alive key TTL is 15 s; boot recovery + temp sweep can exceed it. Starting
   // heartbeats first keeps scanLiveWorkers() seeing this worker so reconcile()

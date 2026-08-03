@@ -24,7 +24,7 @@ export async function getDashboardSnapshot(
 ): Promise<DashboardSnapshot> {
   const supabase = getSupabaseAdmin()
   const { data, error } = await supabase.rpc("dashboard_counts", {
-    p_campaign_id: scope.campaignId,
+    p_campaign_id: scope.campaignId ?? undefined,
     p_include_archived: scope.includeArchived,
   })
 

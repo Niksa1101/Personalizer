@@ -673,3 +673,34 @@ export {
   CANDIDATE_ROW_LIMIT,
   collectScreenshotPathRefs,
 }
+
+export const HEARTBEAT_RETENTION_DAYS = 90
+
+/** §17 item 13. Honors cleanup.dry_run like every other sweep. */
+export async function pruneHeartbeats(deps: {
+  supabase: SupabaseClient<Database>
+  dryRun: boolean
+  now?: Date
+}): Promise<{ deleted: number }> {
+  const now = deps.now ?? new Date()
+  const cutoff = new Date(
+    now.getTime() - HEARTBEAT_RETENTION_DAYS * 24 * 60 * 60 * 1000,
+  ).toISOString()
+
+  if (deps.dryRun) {
+    const { count, error } = await deps.supabase
+      .from("heartbeat")
+      .select("id", { count: "exact", head: true })
+      .lt("created_at", cutoff)
+    if (error) throw new Error(`heartbeat prune (dry-run) failed: ${error.message}`)
+    return { deleted: count ?? 0 }
+  }
+
+  const { data, error } = await deps.supabase
+    .from("heartbeat")
+    .delete()
+    .lt("created_at", cutoff)
+    .select("id")
+  if (error) throw new Error(`heartbeat prune failed: ${error.message}`)
+  return { deleted: data?.length ?? 0 }
+}

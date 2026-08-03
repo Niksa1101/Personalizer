@@ -29,6 +29,7 @@ import {
   createNetlifyClient,
   type NetlifyClient,
 } from "../deploy/netlify"
+import { SiteOwnershipError } from "../deploy/ownership"
 import {
   assembleManifestFromDb,
   publishManifest,
@@ -371,6 +372,10 @@ export const deployStep: Step = {
                 signal: ctx.signal,
               })
             } catch (error) {
+              if (error instanceof SiteOwnershipError) {
+                await setDeployDirty(siteId)
+                throw error
+              }
               const message =
                 error instanceof Error ? error.message : String(error)
               const netlifyBody =
@@ -461,6 +466,9 @@ export const deployStep: Step = {
             campaignLeadId,
             message: error.message,
           })
+        }
+        if (error instanceof SiteOwnershipError) {
+          throw error
         }
         if (error instanceof PipelineStepError) {
           throw error

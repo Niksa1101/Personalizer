@@ -1,4 +1,4 @@
-export type Json =
+﻿export type Json =
   | string
   | number
   | boolean
@@ -39,6 +39,30 @@ export type Database = {
   }
   public: {
     Tables: {
+      adopted_site_paths: {
+        Row: {
+          adopted_at: string
+          id: string
+          note: string | null
+          path: string
+          site_id: string
+        }
+        Insert: {
+          adopted_at?: string
+          id?: string
+          note?: string | null
+          path: string
+          site_id: string
+        }
+        Update: {
+          adopted_at?: string
+          id?: string
+          note?: string | null
+          path?: string
+          site_id?: string
+        }
+        Relationships: []
+      }
       campaign_leads: {
         Row: {
           attempt_count: number
@@ -407,6 +431,13 @@ export type Database = {
             referencedRelation: "campaign_leads"
             referencedColumns: ["id"]
           },
+          {
+            foreignKeyName: "job_runs_campaign_lead_id_fkey"
+            columns: ["campaign_lead_id"]
+            isOneToOne: false
+            referencedRelation: "v_exportable_leads"
+            referencedColumns: ["id"]
+          },
         ]
       }
       landing_pages: {
@@ -458,6 +489,13 @@ export type Database = {
             columns: ["campaign_lead_id"]
             isOneToOne: true
             referencedRelation: "campaign_leads"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "landing_pages_campaign_lead_id_fkey"
+            columns: ["campaign_lead_id"]
+            isOneToOne: true
+            referencedRelation: "v_exportable_leads"
             referencedColumns: ["id"]
           },
         ]
@@ -573,6 +611,13 @@ export type Database = {
             referencedColumns: ["id"]
           },
           {
+            foreignKeyName: "logs_campaign_lead_id_fkey"
+            columns: ["campaign_lead_id"]
+            isOneToOne: false
+            referencedRelation: "v_exportable_leads"
+            referencedColumns: ["id"]
+          },
+          {
             foreignKeyName: "logs_job_run_id_fkey"
             columns: ["job_run_id"]
             isOneToOne: false
@@ -639,6 +684,13 @@ export type Database = {
             columns: ["campaign_lead_id"]
             isOneToOne: false
             referencedRelation: "campaign_leads"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "pipeline_events_campaign_lead_id_fkey"
+            columns: ["campaign_lead_id"]
+            isOneToOne: false
+            referencedRelation: "v_exportable_leads"
             referencedColumns: ["id"]
           },
         ]
@@ -829,6 +881,13 @@ export type Database = {
             referencedColumns: ["id"]
           },
           {
+            foreignKeyName: "videos_campaign_lead_id_fkey"
+            columns: ["campaign_lead_id"]
+            isOneToOne: true
+            referencedRelation: "v_exportable_leads"
+            referencedColumns: ["id"]
+          },
+          {
             foreignKeyName: "videos_intro_video_id_fkey"
             columns: ["intro_video_id"]
             isOneToOne: false
@@ -841,10 +900,10 @@ export type Database = {
     Views: {
       v_exportable_leads: {
         Row: {
-          campaign_archived: boolean
-          campaign_id: string
-          campaign_name: string
-          campaign_ref: string
+          campaign_archived: boolean | null
+          campaign_id: string | null
+          campaign_name: string | null
+          campaign_ref: string | null
           city: string | null
           company: string | null
           country: string | null
@@ -852,25 +911,45 @@ export type Database = {
           email: string | null
           first_name: string | null
           full_name: string | null
-          id: string
+          id: string | null
           industry: string | null
-          is_page_removed: boolean
+          is_page_removed: boolean | null
           landing_url: string | null
           last_name: string | null
-          lead_ref: string
+          lead_ref: string | null
           phone: string | null
           promoted_at: string | null
           state: string | null
-          status: Database["public"]["Enums"]["lead_status"]
+          status: Database["public"]["Enums"]["lead_status"] | null
           video_url: string | null
           website_url: string | null
         }
-        Relationships: []
+        Relationships: [
+          {
+            foreignKeyName: "campaign_leads_campaign_id_fkey"
+            columns: ["campaign_id"]
+            isOneToOne: false
+            referencedRelation: "campaigns"
+            referencedColumns: ["id"]
+          },
+        ]
       }
     }
     Functions: {
+      dashboard_counts: {
+        Args: { p_campaign_id?: string; p_include_archived?: boolean }
+        Returns: Json
+      }
+      dashboard_eta_samples: {
+        Args: { p_campaign_id: string; p_include_archived: boolean }
+        Returns: number[]
+      }
       delete_campaign_retaining_pages: {
         Args: { p_campaign_id: string; p_retain: boolean }
+        Returns: undefined
+      }
+      delete_lead_retaining_pages: {
+        Args: { p_campaign_lead_id: string; p_retain: boolean }
         Returns: undefined
       }
       error_code_bucket: {
@@ -904,35 +983,24 @@ export type Database = {
           campaign_lead_id: string
           lead_ref: string
           outcome: string
-          reason: string | null
+          reason: string
         }[]
-      }
-      unpromote_campaign_lead: {
-        Args: { p_campaign_lead_id: string }
-        Returns: undefined
       }
       reconcile_manifest_deploy: {
         Args: { p_deploy_id: string; p_deployed_at: string; p_rows: Json }
         Returns: undefined
-      }
-      dashboard_counts: {
-        Args: {
-          p_campaign_id?: string | null
-          p_include_archived?: boolean
-        }
-        Returns: Json
       }
       seed_demo_data: { Args: never; Returns: Json }
       snapshot_live_pages: {
         Args: { p_campaign_lead_ids: string[]; p_reason?: string }
         Returns: undefined
       }
-      unpublish_landing_page: {
+      unpromote_campaign_lead: {
         Args: { p_campaign_lead_id: string }
         Returns: undefined
       }
-      delete_lead_retaining_pages: {
-        Args: { p_campaign_lead_id: string; p_retain: boolean }
+      unpublish_landing_page: {
+        Args: { p_campaign_lead_id: string }
         Returns: undefined
       }
       update_campaign_general: {

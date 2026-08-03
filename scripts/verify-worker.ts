@@ -113,7 +113,7 @@ function spawnWorker(extraEnv: Record<string, string>): {
   const npmCmd = process.platform === "win32" ? "npm.cmd" : "npm"
   const child = spawn(npmCmd, ["run", "worker"], {
     cwd: ROOT,
-    env: { ...process.env, ...extraEnv },
+    env: { ...process.env, PZ_ALLOW_MULTIPLE_WORKERS: "1", ...extraEnv },
     stdio: ["ignore", "pipe", "pipe"],
     shell: process.platform === "win32",
   })

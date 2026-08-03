@@ -14,7 +14,7 @@ import { resolveMany } from "@/lib/settings"
 import { getSupabaseAdmin } from "@/lib/supabase"
 
 import { writeStepLog } from "../db"
-import { runCleanupSweeps } from "./sweeps"
+import { pruneHeartbeats, runCleanupSweeps } from "./sweeps"
 
 export const CLEANUP_LOCK_KEY = "pz:cleanup:lock"
 const DAY_MS = 24 * 60 * 60 * 1000
@@ -34,6 +34,7 @@ async function writeSummary(input: {
   bytesFreed?: number
   errorSamples?: string[]
   error?: unknown
+  heartbeatsPruned?: number
 }): Promise<void> {
   const finishedAt = new Date().toISOString()
   const priorSuccess = input.prior?.lastSuccessAt ?? null
@@ -82,6 +83,7 @@ async function writeSummary(input: {
       bytesFreed: summary.bytesFreed,
       dryRun: summary.dryRun,
       skipped: summary.skipped,
+      heartbeatsPruned: input.heartbeatsPruned ?? 0,
     },
   })
 }
@@ -155,6 +157,21 @@ export async function runCleanupJob(opts: {
       shotDays: settings["cleanup.screenshot_retention_days"],
     })
 
+    let heartbeatsPruned = 0
+    try {
+      const pruneResult = await pruneHeartbeats({
+        supabase: getSupabaseAdmin(),
+        dryRun: settings["cleanup.dry_run"],
+      })
+      heartbeatsPruned = pruneResult.deleted
+    } catch (pruneError) {
+      console.error("[cleanup] heartbeat prune failed:", pruneError)
+      result.errorSamples.push(
+        pruneError instanceof Error ? pruneError.message : String(pruneError),
+      )
+      result.counts.errors += 1
+    }
+
     await writeSummary({
       prior,
       startedAt,
@@ -170,6 +187,7 @@ export async function runCleanupJob(opts: {
       counts: result.counts,
       bytesFreed: result.bytesFreed,
       errorSamples: result.errorSamples,
+      heartbeatsPruned,
     })
   } catch (error) {
     console.error("[cleanup] job failed:", error)

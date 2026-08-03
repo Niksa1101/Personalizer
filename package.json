@@ -39,6 +39,10 @@
     "setup:browser": "playwright install chromium",
     "redis:up": "docker start pz-redis || docker run -d --name pz-redis --restart unless-stopped -p 6379:6379 redis:7-alpine",
     "verify:server-only": "tsx scripts/verify-server-only.ts",
+    "docs:errors": "tsx scripts/gen-error-docs.ts",
+    "docs:errors:check": "tsx scripts/gen-error-docs.ts --check",
+    "verify:acceptance": "tsx --conditions react-server --env-file-if-exists=.env.local scripts/verify-acceptance.ts",
+    "adopt:site": "tsx --conditions react-server --env-file-if-exists=.env.local scripts/adopt-site.ts",
     "lint": "eslint"
   },
   "dependencies": {

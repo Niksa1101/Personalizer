@@ -13,6 +13,7 @@ import {
   type StepOutcome,
 } from "@/lib/pipeline-types"
 import { resolveMany } from "@/lib/settings"
+import { SiteOwnershipError } from "@/worker/deploy/ownership"
 
 import {
   claimLead,
@@ -208,6 +209,25 @@ async function runOneStep(input: {
   } catch (error) {
     if (error instanceof ShutdownError) {
       return { outcome: { kind: "shutdown" } }
+    }
+
+    if (error instanceof SiteOwnershipError) {
+      const detail = error.message
+      await closeJobRun(jobRunId, "failed", { code: "unknown", detail })
+      await insertPipelineEvent({
+        campaignLeadId: context.campaignLead.id,
+        kind: "step_failed",
+        step,
+        message: `${step} failed: ${detail}`,
+        errorCode: "unknown",
+        meta: { attempt },
+      })
+      await markLeadFailed({
+        campaignLeadId: context.campaignLead.id,
+        errorCode: "unknown",
+        errorDetail: detail,
+      })
+      return { outcome: { kind: "failed" } }
     }
 
     const code =

@@ -114,3 +114,86 @@ describe("collectScreenshotPathRefs", () => {
     )
   })
 })
+
+describe("pruneHeartbeats", () => {
+  it("dry-run counts stale rows without deleting", async () => {
+    const { pruneHeartbeats, HEARTBEAT_RETENTION_DAYS } = await import(
+      "@/worker/cleanup/sweeps"
+    )
+    const now = new Date("2026-06-01T00:00:00.000Z")
+    const calls: string[] = []
+    const supabase = {
+      from(table: string) {
+        assert.equal(table, "heartbeat")
+        return {
+          select(_cols: string, opts?: { count?: string; head?: boolean }) {
+            if (opts?.head) {
+              return {
+                lt(_col: string, cutoff: string) {
+                  calls.push(`count:${cutoff}`)
+                  return Promise.resolve({ count: 3, error: null })
+                },
+              }
+            }
+            return {
+              lt() {
+                return { select: () => Promise.resolve({ data: [], error: null }) }
+              },
+            }
+          },
+          delete() {
+            throw new Error("delete should not run in dry-run")
+          },
+        }
+      },
+    }
+
+    const result = await pruneHeartbeats({
+      supabase: supabase as never,
+      dryRun: true,
+      now,
+    })
+    assert.equal(result.deleted, 3)
+    assert.equal(calls.length, 1)
+    const expectedCutoff = new Date(
+      now.getTime() - HEARTBEAT_RETENTION_DAYS * 24 * 60 * 60 * 1000,
+    ).toISOString()
+    assert.equal(calls[0], `count:${expectedCutoff}`)
+  })
+
+  it("wet run deletes stale rows", async () => {
+    const { pruneHeartbeats } = await import("@/worker/cleanup/sweeps")
+    const now = new Date("2026-06-01T00:00:00.000Z")
+    let deleted = false
+    const supabase = {
+      from(table: string) {
+        assert.equal(table, "heartbeat")
+        return {
+          delete() {
+            deleted = true
+            return {
+              lt(_col: string, cutoff: string) {
+                assert.match(cutoff, /^\d{4}-/)
+                return {
+                  select: () =>
+                    Promise.resolve({
+                      data: [{ id: 1 }, { id: 2 }],
+                      error: null,
+                    }),
+                }
+              },
+            }
+          },
+        }
+      },
+    }
+
+    const result = await pruneHeartbeats({
+      supabase: supabase as never,
+      dryRun: false,
+      now,
+    })
+    assert.equal(deleted, true)
+    assert.equal(result.deleted, 2)
+  })
+})
