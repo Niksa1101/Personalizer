@@ -760,6 +760,24 @@ RLS enabled, no policy — service-role only. Populated by `snapshot_live_pages(
 
 **Snapshot scope** covers `deploy_status IN ('pending','uploading','live','failed')` with non-null `html`/`content_sha1` — the manifest-eligible set, not `live` alone. A page's row status lags the site: a campaign mid-deploy is genuinely published on Netlify while its rows still read `pending`. Retaining only `live` rows silently 404'd pages the operator had asked to keep.
 
+### 5.14a `adopted_site_paths`
+
+Durable, per-path operator adoption of files that already existed on the Netlify site before the app first deployed (`docs/Tech.md` §17 risk 9). Per-path on purpose: adopting a whole site would disarm the ownership guard forever.
+
+| Column | Type | Null | Default | Notes |
+|---|---|---|---|---|
+| `id` | `uuid` | no | `gen_random_uuid()` | PK |
+| `site_id` | `text` | no | — | Netlify site id (`NETLIFY_SITE_ID`) |
+| `path` | `text` | no | — | Site-relative path with leading `/`. Unique per site. |
+| `adopted_at` | `timestamptz` | no | `now()` | |
+| `note` | `text` | yes | — | Operator note from `npm run adopt:site` |
+
+```sql
+CREATE INDEX adopted_site_paths_site_idx ON adopted_site_paths (site_id);
+```
+
+RLS enabled, no policy — service-role only. Populated by `npm run adopt:site -- --apply`.
+
 ### 5.15 `pending_site_sync`
 
 Durable record that the Netlify site is behind the database. Written **inside the same transaction** as the change that caused it, which is the whole point: Redis was previously the only record, so a Redis outage during a campaign delete stranded published pages with their source rows already gone (`Tech.md` §10.3).
@@ -1022,6 +1040,9 @@ supabase/
 
     -- Added in Phase 16 (PRD.md §11):
     20260730120000_cleanup_settings.sql            -- §5.12 — cleanup.enabled, cleanup.dry_run, cleanup.screenshot_retention_days
+
+    -- Added in Phase 18 (PRD.md §11):
+    20260803120000_adopted_site_paths.sql         -- §5.14a — adopted_site_paths (ownership guard adoption)
   seed.sql                               -- one line: SELECT public.seed_demo_data();
 ```
 

@@ -41,7 +41,7 @@ npm run worker                    # not exercised by the validation run — see 
 
 | Tool | Version | Notes |
 |---|---|---|
-| [Node.js](https://nodejs.org/) | ≥ 20.9.0 | LTS recommended |
+| [Node.js](https://nodejs.org/) | ≥ 20.9.0 (CI tests on 22.x) | LTS recommended |
 | [Docker Desktop](https://www.docker.com/products/docker-desktop/) | current | Required for Redis (`npm run redis:up`) |
 | [Git](https://git-scm.com/) | current | |
 
@@ -216,3 +216,8 @@ One `verify:<phase>` script per phase — see `package.json` for the full list.
 - `docs/PRD.md` — product scope and build phases
 - `docs/Tech.md` — architecture, auth, pipeline, env, keep-alive
 - `docs/DB.md` — schema and migrations
+- `docs/Errors.md` — generated error-code reference (`npm run docs:errors`)
+
+## Known limitations
+
+<!-- filled at v1.0.0 -->

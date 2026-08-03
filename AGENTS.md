@@ -46,6 +46,7 @@ Three documents in `docs/` are authoritative. Read the relevant one before imple
 | `docs/PRD.md` | Product scope, screens, statuses, acceptance criteria, and the **numbered build phases (§11)** |
 | `docs/Tech.md` | Architecture, pipeline, recorder, FFmpeg, deploy, env, and verified Next.js 16 constraints (§1.1, §18) |
 | `docs/DB.md` | Schema: enums, tables, indexes, RLS, migrations, seed |
+| `docs/Errors.md` | Generated from `ERROR_COPY` — do not hand-edit, run `npm run docs:errors` |
 
 Work proceeds by the build phases in `docs/PRD.md` §11. Do not start a phase whose prerequisites are unmet, and do not expand a phase's scope — each has binary exit criteria.
 
