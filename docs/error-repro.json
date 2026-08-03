@@ -1,0 +1,23 @@
+{
+  "dns_failure": "AC-1 fixture `https://nonexistent-pz18-dns.invalid`; stub host `https://fail-dns_failure.test` in verify-worker (covered by worker/recorder/classify.test.ts)",
+  "connection_refused": "AC-1 fixture `https://127.0.0.1:9`; ENOTFOUND/ECONNREFUSED classifier inputs (covered by worker/recorder/classify.test.ts)",
+  "ssl_error": "AC-1 fixtures `https://expired.badssl.com`, `https://self-signed.badssl.com`, `https://wrong.host.badssl.com`; ERR_CERT_* classifier inputs (covered by worker/recorder/classify.test.ts)",
+  "http_4xx": "AC-1 fixture `https://httpstat.us/404`; HTTP 404 classifier input (covered by worker/recorder/classify.test.ts)",
+  "http_5xx": "AC-1 fixture `https://httpbingo.dev/500`; HTTP 5xx classifier input (covered by worker/recorder/classify.test.ts)",
+  "parked_domain": "AC-1 fixture `https://www.hugedomains.com`; for-sale body heuristic (covered by worker/recorder/classify.test.ts)",
+  "empty_page": "AC-1 fixture `https://example.com`; thin-content heuristic (covered by worker/recorder/classify.test.ts)",
+  "not_a_website": "not forced — written at import against skipped lead (import_commit_fn.sql:212-216, 284) (covered by scripts/verify-import.ts)",
+  "bot_detected": "AC-1 fixture `https://bot.sannysoft.com`; operator should confirm live classification before run — body-marker heuristic (covered by worker/recorder/classify.test.ts)",
+  "captcha": "AC-1 fixture `https://www.instagram.com/pz18fixture`; recaptcha iframe heuristic (covered by worker/recorder/classify.test.ts)",
+  "geo_blocked": "AC-1 fixture `https://postman-echo.com/status/403`; 403 + geo body heuristic (covered by worker/recorder/classify.test.ts)",
+  "login_required": "AC-1 fixture `https://github.com/login`; final URL login redirect heuristic (covered by worker/recorder/classify.test.ts)",
+  "nav_timeout": "AC-1 fixture `https://httpbin.org/delay/10`; navigation deadline exceeded (covered by worker/recorder/classify.test.ts)",
+  "browser_crash": "AC-3 forcing pass step 53 — `taskkill /F` on Playwright chromium child mid-record; confirm code before relying on invalid-executable fallback (covered by worker/recorder/classify.test.ts)",
+  "ffmpeg_failure": "AC-3 forcing pass step 47 — point ffmpeg binary path at garbage; restore path and confirm merge succeeds",
+  "intro_missing": "not forced — pauses without failing; assign intro to resume (covered by scripts/verify-intros.ts)",
+  "missing_asset": "AC-3 forcing pass step 45 — delete master from disk (not purged); re-record or re-import to restore (covered by lib/recording-precheck.test.ts)",
+  "storage_upload_failed": "AC-3 forcing pass step 49 — point bucket at nonexistent name or temporarily revoke `lead-videos`; restore bucket and confirm upload succeeds (covered by worker/video/upload.ts)",
+  "netlify_failure": "AC-3 forcing pass step 51 — set `NETLIFY_AUTH_TOKEN` to garbage; restore token and confirm deploy succeeds (covered by scripts/verify-leads-ui.ts drawer leg)",
+  "disk_full": "not forced — ENOSPC during merge throws `disk_full` (covered by worker/video/merge.ts)",
+  "unknown": "not forced — classifier fallback when no rule matches (covered by worker/recorder/classify.ts)"
+}

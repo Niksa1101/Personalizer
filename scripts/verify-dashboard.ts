@@ -447,7 +447,7 @@ async function main(): Promise<void> {
 
   try {
     const beforeAll = await supabase.rpc("dashboard_counts", {
-      p_campaign_id: null,
+      p_campaign_id: undefined,
       p_include_archived: false,
     })
     if (beforeAll.error) {
@@ -610,7 +610,7 @@ async function main(): Promise<void> {
     const afterAll = dashboardCountsSchema.parse(
       (
         await supabase.rpc("dashboard_counts", {
-          p_campaign_id: null,
+          p_campaign_id: undefined,
           p_include_archived: false,
         })
       ).data,
@@ -668,7 +668,7 @@ async function main(): Promise<void> {
 
     const readyLeadId = campaignLeadIds[statuses.indexOf("ready")]
     const { data: etaBeforePause } = await supabase.rpc("dashboard_counts", {
-      p_campaign_id: null,
+      p_campaign_id: undefined,
       p_include_archived: false,
     })
     const samplesBefore = dashboardCountsSchema.parse(etaBeforePause).eta_samples.length
@@ -680,7 +680,7 @@ async function main(): Promise<void> {
     })
 
     const { data: etaAfterPause } = await supabase.rpc("dashboard_counts", {
-      p_campaign_id: null,
+      p_campaign_id: undefined,
       p_include_archived: false,
     })
     const samplesAfterPause = dashboardCountsSchema.parse(etaAfterPause).eta_samples.length
@@ -963,7 +963,7 @@ async function main(): Promise<void> {
 
     if (anon) {
       const { error: anonError } = await anon.rpc("dashboard_counts", {
-        p_campaign_id: null,
+        p_campaign_id: undefined,
         p_include_archived: false,
       })
       if (anonError) {

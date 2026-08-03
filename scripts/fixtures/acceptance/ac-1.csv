@@ -1,0 +1,106 @@
+website,company,first_name,last_name,email,city,country,industry
+https://www.ruby-lang.org,AC1 Good Ruby Lang,Accept,Fixture,accept-ac1-good-ruby-lang@example.com,Portland,USA,Software
+https://www.erlang.org,AC1 Good Erlang Org,Accept,Fixture,accept-ac1-good-erlang-org@example.com,Portland,USA,Software
+https://www.haskell.org,AC1 Good Haskell Org,Accept,Fixture,accept-ac1-good-haskell-org@example.com,Portland,USA,Software
+https://nginx.org,AC1 Good Nginx,Accept,Fixture,accept-ac1-good-nginx@example.com,Portland,USA,Software
+https://www.openssl.org,AC1 Good OpenSSL,Accept,Fixture,accept-ac1-good-openssl@example.com,Portland,USA,Software
+https://www.typescriptlang.org,AC1 Good TypeScript,Accept,Fixture,accept-ac1-good-typescript@example.com,Portland,USA,Software
+https://www.docker.com,AC1 Good Docker,Accept,Fixture,accept-ac1-good-docker@example.com,Portland,USA,Software
+https://kubernetes.io,AC1 Good Kubernetes,Accept,Fixture,accept-ac1-good-kubernetes@example.com,Portland,USA,Software
+https://www.r-project.org,AC1 Good R Project,Accept,Fixture,accept-ac1-good-r-project@example.com,Portland,USA,Software
+https://www.w3.org,AC1 Good W3C,Accept,Fixture,accept-ac1-good-w3c@example.com,Portland,USA,Software
+https://www.ietf.org,AC1 Good IETF,Accept,Fixture,accept-ac1-good-ietf@example.com,Portland,USA,Software
+https://www.unicode.org,AC1 Good Unicode,Accept,Fixture,accept-ac1-good-unicode@example.com,Portland,USA,Software
+https://www.eff.org,AC1 Good EFF,Accept,Fixture,accept-ac1-good-eff@example.com,Portland,USA,Software
+https://www.torproject.org,AC1 Good Tor Project,Accept,Fixture,accept-ac1-good-tor-project@example.com,Portland,USA,Software
+https://www.libreoffice.org,AC1 Good LibreOffice,Accept,Fixture,accept-ac1-good-libreoffice@example.com,Portland,USA,Software
+https://www.blender.org,AC1 Good Blender,Accept,Fixture,accept-ac1-good-blender@example.com,Portland,USA,Software
+https://inkscape.org,AC1 Good Inkscape,Accept,Fixture,accept-ac1-good-inkscape@example.com,Portland,USA,Software
+https://www.videolan.org,AC1 Good VideoLAN,Accept,Fixture,accept-ac1-good-videolan@example.com,Portland,USA,Software
+https://www.mediawiki.org,AC1 Good MediaWiki,Accept,Fixture,accept-ac1-good-mediawiki@example.com,Portland,USA,Software
+https://archlinux.org,AC1 Good Arch Linux,Accept,Fixture,accept-ac1-good-arch-linux@example.com,Portland,USA,Software
+https://www.gentoo.org,AC1 Good Gentoo,Accept,Fixture,accept-ac1-good-gentoo@example.com,Portland,USA,Software
+https://alpinelinux.org,AC1 Good Alpine Linux,Accept,Fixture,accept-ac1-good-alpine-linux@example.com,Portland,USA,Software
+https://ubuntu.com,AC1 Good Ubuntu,Accept,Fixture,accept-ac1-good-ubuntu@example.com,Portland,USA,Software
+https://getfedora.org,AC1 Good Fedora,Accept,Fixture,accept-ac1-good-fedora@example.com,Portland,USA,Software
+https://www.vim.org,AC1 Good Vim,Accept,Fixture,accept-ac1-good-vim@example.com,Portland,USA,Software
+https://helix-editor.com,AC1 Good Helix Editor,Accept,Fixture,accept-ac1-good-helix-editor@example.com,Portland,USA,Software
+https://ziglang.org,AC1 Good Zig,Accept,Fixture,accept-ac1-good-zig@example.com,Portland,USA,Software
+https://www.swift.org,AC1 Good Swift,Accept,Fixture,accept-ac1-good-swift@example.com,Portland,USA,Software
+https://kotlinlang.org,AC1 Good Kotlin,Accept,Fixture,accept-ac1-good-kotlin@example.com,Portland,USA,Software
+https://www.scala-lang.org,AC1 Good Scala,Accept,Fixture,accept-ac1-good-scala@example.com,Portland,USA,Software
+https://clojure.org,AC1 Good Clojure,Accept,Fixture,accept-ac1-good-clojure@example.com,Portland,USA,Software
+https://elixir-lang.org,AC1 Good Elixir,Accept,Fixture,accept-ac1-good-elixir@example.com,Portland,USA,Software
+https://julialang.org,AC1 Good Julia,Accept,Fixture,accept-ac1-good-julia@example.com,Portland,USA,Software
+https://ocaml.org,AC1 Good OCaml,Accept,Fixture,accept-ac1-good-ocaml@example.com,Portland,USA,Software
+https://www.electronjs.org,AC1 Good Electron,Accept,Fixture,accept-ac1-good-electron@example.com,Portland,USA,Software
+https://crates.io,AC1 Good Crates IO,Accept,Fixture,accept-ac1-good-crates-io@example.com,Portland,USA,Software
+https://pypi.org,AC1 Good PyPI,Accept,Fixture,accept-ac1-good-pypi@example.com,Portland,USA,Software
+https://www.npmjs.com,AC1 Good Npm,Accept,Fixture,accept-ac1-good-npm@example.com,Portland,USA,Software
+https://pnpm.io,AC1 Good Pnpm,Accept,Fixture,accept-ac1-good-pnpm@example.com,Portland,USA,Software
+https://deno.com,AC1 Good Deno,Accept,Fixture,accept-ac1-good-deno@example.com,Portland,USA,Software
+https://eslint.org,AC1 Good Eslint,Accept,Fixture,accept-ac1-good-eslint@example.com,Portland,USA,Software
+https://prettier.io,AC1 Good Prettier,Accept,Fixture,accept-ac1-good-prettier@example.com,Portland,USA,Software
+https://vitejs.dev,AC1 Good Vite,Accept,Fixture,accept-ac1-good-vite@example.com,Portland,USA,Software
+https://react.dev,AC1 Good React,Accept,Fixture,accept-ac1-good-react@example.com,Portland,USA,Software
+https://vuejs.org,AC1 Good Vue,Accept,Fixture,accept-ac1-good-vue@example.com,Portland,USA,Software
+https://svelte.dev,AC1 Good Svelte,Accept,Fixture,accept-ac1-good-svelte@example.com,Portland,USA,Software
+https://astro.build,AC1 Good Astro,Accept,Fixture,accept-ac1-good-astro@example.com,Portland,USA,Software
+https://nextjs.org,AC1 Good Nextjs,Accept,Fixture,accept-ac1-good-nextjs@example.com,Portland,USA,Software
+https://remix.run,AC1 Good Remix,Accept,Fixture,accept-ac1-good-remix@example.com,Portland,USA,Software
+https://nuxt.com,AC1 Good Nuxt,Accept,Fixture,accept-ac1-good-nuxt@example.com,Portland,USA,Software
+https://www.gatsbyjs.com,AC1 Good Gatsby,Accept,Fixture,accept-ac1-good-gatsby@example.com,Portland,USA,Software
+https://gohugo.io,AC1 Good Hugo,Accept,Fixture,accept-ac1-good-hugo@example.com,Portland,USA,Software
+https://jquery.com,AC1 Good Jquery,Accept,Fixture,accept-ac1-good-jquery@example.com,Portland,USA,Software
+https://lodash.com,AC1 Good Lodash,Accept,Fixture,accept-ac1-good-lodash@example.com,Portland,USA,Software
+https://webpack.js.org,AC1 Good Webpack,Accept,Fixture,accept-ac1-good-webpack@example.com,Portland,USA,Software
+https://rollupjs.org,AC1 Good Rollup,Accept,Fixture,accept-ac1-good-rollup@example.com,Portland,USA,Software
+https://tailwindcss.com,AC1 Good Tailwind,Accept,Fixture,accept-ac1-good-tailwind@example.com,Portland,USA,Software
+https://getbootstrap.com,AC1 Good Bootstrap,Accept,Fixture,accept-ac1-good-bootstrap@example.com,Portland,USA,Software
+https://d3js.org,AC1 Good D3 Js,Accept,Fixture,accept-ac1-good-d3-js@example.com,Portland,USA,Software
+https://threejs.org,AC1 Good Three Js,Accept,Fixture,accept-ac1-good-three-js@example.com,Portland,USA,Software
+https://socket.io,AC1 Good Socket IO,Accept,Fixture,accept-ac1-good-socket-io@example.com,Portland,USA,Software
+https://redis.io,AC1 Good Redis,Accept,Fixture,accept-ac1-good-redis@example.com,Portland,USA,Software
+https://www.mongodb.com,AC1 Good MongoDB,Accept,Fixture,accept-ac1-good-mongodb@example.com,Portland,USA,Software
+https://mariadb.org,AC1 Good MariaDB,Accept,Fixture,accept-ac1-good-mariadb@example.com,Portland,USA,Software
+https://www.elastic.co,AC1 Good Elastic,Accept,Fixture,accept-ac1-good-elastic@example.com,Portland,USA,Software
+https://grafana.com,AC1 Good Grafana,Accept,Fixture,accept-ac1-good-grafana@example.com,Portland,USA,Software
+https://prometheus.io,AC1 Good Prometheus,Accept,Fixture,accept-ac1-good-prometheus@example.com,Portland,USA,Software
+https://traefik.io,AC1 Good Traefik,Accept,Fixture,accept-ac1-good-traefik@example.com,Portland,USA,Software
+https://caddyserver.com,AC1 Good Caddy,Accept,Fixture,accept-ac1-good-caddy@example.com,Portland,USA,Software
+https://letsencrypt.org,AC1 Good Lets Encrypt,Accept,Fixture,accept-ac1-good-lets-encrypt@example.com,Portland,USA,Software
+https://matrix.org,AC1 Good Matrix,Accept,Fixture,accept-ac1-good-matrix@example.com,Portland,USA,Software
+https://jitsi.org,AC1 Good Jitsi,Accept,Fixture,accept-ac1-good-jitsi@example.com,Portland,USA,Software
+https://obsproject.com,AC1 Good OBS,Accept,Fixture,accept-ac1-good-obs@example.com,Portland,USA,Software
+https://godotengine.org,AC1 Good Godot,Accept,Fixture,accept-ac1-good-godot@example.com,Portland,USA,Software
+https://llvm.org,AC1 Good LLVM,Accept,Fixture,accept-ac1-good-llvm@example.com,Portland,USA,Software
+https://nim-lang.org,AC1 Good Nim,Accept,Fixture,accept-ac1-good-nim@example.com,Portland,USA,Software
+https://crystal-lang.org,AC1 Good Crystal,Accept,Fixture,accept-ac1-good-crystal@example.com,Portland,USA,Software
+https://dlang.org,AC1 Good D Lang,Accept,Fixture,accept-ac1-good-d-lang@example.com,Portland,USA,Software
+https://www.fsharp.org,AC1 Good Fsharp,Accept,Fixture,accept-ac1-good-fsharp@example.com,Portland,USA,Software
+https://www.eclipse.org,AC1 Good Eclipse,Accept,Fixture,accept-ac1-good-eclipse@example.com,Portland,USA,Software
+https://nonexistent-pz18-dns.invalid,AC1 Bad PZ18 DNS Invalid,Accept,Fixture,accept-ac1-bad-pz18-dns-invalid@example.com,Portland,USA,Software
+https://127.0.0.1:9,AC1 Bad PZ18 Conn Refused,Accept,Fixture,accept-ac1-bad-pz18-conn-refused@example.com,Portland,USA,Software
+https://expired.badssl.com,AC1 Bad PZ18 SSL Expired,Accept,Fixture,accept-ac1-bad-pz18-ssl-expired@example.com,Portland,USA,Software
+https://httpstat.us/404,AC1 Bad PZ18 HTTP 404,Accept,Fixture,accept-ac1-bad-pz18-http-404@example.com,Portland,USA,Software
+https://httpbingo.dev/500,AC1 Bad PZ18 HTTP 500,Accept,Fixture,accept-ac1-bad-pz18-http-500@example.com,Portland,USA,Software
+https://example.com,AC1 Bad PZ18 Empty Example,Accept,Fixture,accept-ac1-bad-pz18-empty-example@example.com,Portland,USA,Software
+https://www.hugedomains.com,AC1 Bad PZ18 Parked,Accept,Fixture,accept-ac1-bad-pz18-parked@example.com,Portland,USA,Software
+https://nowebapp.github.io,AC1 Bad PZ18 Thin Landing,Accept,Fixture,accept-ac1-bad-pz18-thin-landing@example.com,Portland,USA,Software
+https://www.cloudflare.com,AC1 Bad PZ18 Cloudflare,Accept,Fixture,accept-ac1-bad-pz18-cloudflare@example.com,Portland,USA,Software
+https://www.nytimes.com,AC1 Bad PZ18 NYTimes,Accept,Fixture,accept-ac1-bad-pz18-nytimes@example.com,Portland,USA,Software
+https://www.reddit.com,AC1 Bad PZ18 Reddit,Accept,Fixture,accept-ac1-bad-pz18-reddit@example.com,Portland,USA,Software
+https://github.com/login,AC1 Bad PZ18 GitHub Login,Accept,Fixture,accept-ac1-bad-pz18-github-login@example.com,Portland,USA,Software
+https://postman-echo.com/status/403,AC1 Bad PZ18 HTTP 403,Accept,Fixture,accept-ac1-bad-pz18-http-403@example.com,Portland,USA,Software
+https://httpbin.org/delay/10,AC1 Bad PZ18 Slow Nav,Accept,Fixture,accept-ac1-bad-pz18-slow-nav@example.com,Portland,USA,Software
+https://self-signed.badssl.com,AC1 Bad PZ18 Self Signed,Accept,Fixture,accept-ac1-bad-pz18-self-signed@example.com,Portland,USA,Software
+https://wrong.host.badssl.com,AC1 Bad PZ18 Wrong Host,Accept,Fixture,accept-ac1-bad-pz18-wrong-host@example.com,Portland,USA,Software
+https://mocky.io,AC1 Bad PZ18 Mocky,Accept,Fixture,accept-ac1-bad-pz18-mocky@example.com,Portland,USA,Software
+https://httpforever.com,AC1 Bad PZ18 HTTP Forever,Accept,Fixture,accept-ac1-bad-pz18-http-forever@example.com,Portland,USA,Software
+https://bot.sannysoft.com,AC1 Bad PZ18 Bot Check,Accept,Fixture,accept-ac1-bad-pz18-bot-check@example.com,Portland,USA,Software
+https://www.instagram.com/pz18fixture,AC1 Bad PZ18 Instagram,Accept,Fixture,accept-ac1-bad-pz18-instagram@example.com,Portland,USA,Software
+https://www.linkedin.com/company/pz18-acceptance-fixture,PZ18 Social Only,Accept,Fixture,accept-pz18-social-only@example.com,Portland,USA,Software
+https://www.ruby-lang.org,AC1 Good Ruby Lang Dup,Accept,Fixture,accept-ac1-good-ruby-lang@example.com,Portland,USA,Software
+https://www.erlang.org,AC1 Good Erlang Org Dup,Accept,Fixture,accept-ac1-good-erlang-org@example.com,Portland,USA,Software
+https://www.haskell.org,AC1 Good Haskell Org Dup,Accept,Fixture,accept-ac1-good-haskell-org@example.com,Portland,USA,Software
+https://nginx.org,AC1 Good Nginx Dup,Accept,Fixture,accept-ac1-good-nginx@example.com,Portland,USA,Software

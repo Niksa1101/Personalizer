@@ -1,0 +1,11 @@
+website,company,first_name,last_name,email,city,country,industry
+https://www.vercel.com,AC7 AC7 Vercel,Accept,Fixture,accept-ac7-ac7-vercel@example.com,Portland,USA,Software
+https://www.netlify.com,AC7 AC7 Netlify,Accept,Fixture,accept-ac7-ac7-netlify@example.com,Portland,USA,Software
+https://www.digitalocean.com,AC7 AC7 DigitalOcean,Accept,Fixture,accept-ac7-ac7-digitalocean@example.com,Portland,USA,Software
+https://www.linode.com,AC7 AC7 Linode,Accept,Fixture,accept-ac7-ac7-linode@example.com,Portland,USA,Software
+https://www.heroku.com,AC7 AC7 Heroku,Accept,Fixture,accept-ac7-ac7-heroku@example.com,Portland,USA,Software
+https://www.fly.io,AC7 AC7 Fly,Accept,Fixture,accept-ac7-ac7-fly@example.com,Portland,USA,Software
+https://www.railway.app,AC7 AC7 Railway,Accept,Fixture,accept-ac7-ac7-railway@example.com,Portland,USA,Software
+https://www.render.com,AC7 AC7 Render,Accept,Fixture,accept-ac7-ac7-render@example.com,Portland,USA,Software
+https://www.supabase.com,AC7 AC7 Supabase,Accept,Fixture,accept-ac7-ac7-supabase@example.com,Portland,USA,Software
+https://www.fastly.com,AC7 AC7 Fastly,Accept,Fixture,accept-ac7-ac7-fastly@example.com,Portland,USA,Software
