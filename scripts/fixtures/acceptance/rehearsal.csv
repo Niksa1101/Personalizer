@@ -1,0 +1,21 @@
+website,company,first_name,last_name,email,city,country,industry
+https://www.ansible.com,Rehearsal Reh Ansible,Accept,Fixture,accept-rehearsal-reh-ansible@example.com,Portland,USA,Software
+https://www.terraform.io,Rehearsal Reh Terraform,Accept,Fixture,accept-rehearsal-reh-terraform@example.com,Portland,USA,Software
+https://www.packer.io,Rehearsal Reh Packer,Accept,Fixture,accept-rehearsal-reh-packer@example.com,Portland,USA,Software
+https://www.vagrantup.com,Rehearsal Reh Vagrant,Accept,Fixture,accept-rehearsal-reh-vagrant@example.com,Portland,USA,Software
+https://www.consul.io,Rehearsal Reh Consul,Accept,Fixture,accept-rehearsal-reh-consul@example.com,Portland,USA,Software
+https://www.vaultproject.io,Rehearsal Reh Vault,Accept,Fixture,accept-rehearsal-reh-vault@example.com,Portland,USA,Software
+https://www.nomadproject.io,Rehearsal Reh Nomad,Accept,Fixture,accept-rehearsal-reh-nomad@example.com,Portland,USA,Software
+https://www.boundaryproject.io,Rehearsal Reh Boundary,Accept,Fixture,accept-rehearsal-reh-boundary@example.com,Portland,USA,Software
+https://www.waypointproject.io,Rehearsal Reh Waypoint,Accept,Fixture,accept-rehearsal-reh-waypoint@example.com,Portland,USA,Software
+https://www.pulumi.com,Rehearsal Reh Pulumi,Accept,Fixture,accept-rehearsal-reh-pulumi@example.com,Portland,USA,Software
+https://www.crossplane.io,Rehearsal Reh Crossplane,Accept,Fixture,accept-rehearsal-reh-crossplane@example.com,Portland,USA,Software
+https://www.spinnaker.io,Rehearsal Reh Spinnaker,Accept,Fixture,accept-rehearsal-reh-spinnaker@example.com,Portland,USA,Software
+https://www.argoproj.io,Rehearsal Reh Argo,Accept,Fixture,accept-rehearsal-reh-argo@example.com,Portland,USA,Software
+https://www.fluxcd.io,Rehearsal Reh Flux,Accept,Fixture,accept-rehearsal-reh-flux@example.com,Portland,USA,Software
+https://www.backstage.io,Rehearsal Reh Backstage,Accept,Fixture,accept-rehearsal-reh-backstage@example.com,Portland,USA,Software
+https://www.openpolicyagent.org,Rehearsal Reh OPA,Accept,Fixture,accept-rehearsal-reh-opa@example.com,Portland,USA,Software
+https://pz18-reh-dns.invalid,Rehearsal Reh DNS Invalid,Accept,Fixture,accept-rehearsal-reh-dns-invalid@example.com,Portland,USA,Software
+https://untrusted-root.badssl.com,Rehearsal Reh SSL Untrusted,Accept,Fixture,accept-rehearsal-reh-ssl-untrusted@example.com,Portland,USA,Software
+https://tls-v1-0.badssl.com,Rehearsal Reh TLS10,Accept,Fixture,accept-rehearsal-reh-tls10@example.com,Portland,USA,Software
+https://revoked.badssl.com,Rehearsal Reh Revoked SSL,Accept,Fixture,accept-rehearsal-reh-revoked-ssl@example.com,Portland,USA,Software

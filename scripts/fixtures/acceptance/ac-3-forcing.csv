@@ -1,0 +1,7 @@
+website,company,first_name,last_name,email,city,country,industry
+https://www.datadoghq.com,AC3 AC3 Force Datadog,Accept,Fixture,accept-ac3-ac3-force-datadog@example.com,Portland,USA,Software
+https://www.sentry.io,AC3 AC3 Force Sentry,Accept,Fixture,accept-ac3-ac3-force-sentry@example.com,Portland,USA,Software
+https://www.launchdarkly.com,AC3 AC3 Force LaunchDarkly,Accept,Fixture,accept-ac3-ac3-force-launchdarkly@example.com,Portland,USA,Software
+https://www.circleci.com,AC3 AC3 Force CircleCI,Accept,Fixture,accept-ac3-ac3-force-circleci@example.com,Portland,USA,Software
+https://www.buildkite.com,AC3 AC3 Force Buildkite,Accept,Fixture,accept-ac3-ac3-force-buildkite@example.com,Portland,USA,Software
+https://www.harness.io,AC3 AC3 Force Harness,Accept,Fixture,accept-ac3-ac3-force-harness@example.com,Portland,USA,Software

@@ -1,0 +1,29 @@
+<!-- generated — do not hand-edit; run `npm run docs:errors` -->
+
+# Error codes
+
+Plain-language reference for every pipeline `error_code`. Generated from `lib/error-copy.ts` and `docs/error-repro.json`.
+
+| error_code | bucket | message | retryable | landed status | UI location | repro |
+|---|---|---|---|---|---|---|
+| `dns_failure` | bad_website | The domain does not resolve — check the website URL. | no — terminal (§7.3) | failed | `edit-fields` | AC-1 fixture `https://nonexistent-pz18-dns.invalid`; stub host `https://fail-dns_failure.test` in verify-worker (covered by worker/recorder/classify.test.ts) |
+| `connection_refused` | bad_website | The server refused the connection — the site may be down. | no — terminal (§7.3) | failed | `edit-fields` | AC-1 fixture `https://127.0.0.1:9`; ENOTFOUND/ECONNREFUSED classifier inputs (covered by worker/recorder/classify.test.ts) |
+| `ssl_error` | bad_website | The site's SSL certificate is invalid or expired. | no — terminal (§7.3) | failed | `edit-fields` | AC-1 fixtures `https://expired.badssl.com`, `https://self-signed.badssl.com`, `https://wrong.host.badssl.com`; ERR_CERT_* classifier inputs (covered by worker/recorder/classify.test.ts) |
+| `http_4xx` | bad_website | The page returned a client error (404 or similar). | no — terminal (§7.3) | failed | `edit-fields` | AC-1 fixture `https://httpstat.us/404`; HTTP 404 classifier input (covered by worker/recorder/classify.test.ts) |
+| `http_5xx` | bad_website | The origin server returned an error. | no — terminal (§7.3) | failed | `edit-fields` | AC-1 fixture `https://httpbingo.dev/500`; HTTP 5xx classifier input (covered by worker/recorder/classify.test.ts) |
+| `parked_domain` | bad_website | The domain resolves to a registrar placeholder, not a real site. | no — terminal (§7.3) | failed | `edit-fields` | AC-1 fixture `https://www.hugedomains.com`; for-sale body heuristic (covered by worker/recorder/classify.test.ts) |
+| `empty_page` | bad_website | The page loaded but had nothing meaningful to scroll. | no — terminal (§7.3) | failed | `edit-fields` | AC-1 fixture `https://example.com`; thin-content heuristic (covered by worker/recorder/classify.test.ts) |
+| `not_a_website` | bad_website | This looks like a social profile or directory listing, not a website. | no — terminal (§7.3) | skipped | `requeue-recording` | not forced — written at import against skipped lead (import_commit_fn.sql:212-216, 284) (covered by scripts/verify-import.ts) |
+| `bot_detected` | blocked | The site showed a bot-detection or challenge page. | yes — auto-retry then fail | failed | `retry-recording` | AC-1 fixture `https://bot.sannysoft.com`; operator should confirm live classification before run — body-marker heuristic (covered by worker/recorder/classify.test.ts) |
+| `captcha` | blocked | A CAPTCHA blocked the recording. | yes — auto-retry then fail | failed | `retry-recording` | AC-1 fixture `https://www.instagram.com/pz18fixture`; recaptcha iframe heuristic (covered by worker/recorder/classify.test.ts) |
+| `geo_blocked` | blocked | The site blocked access from this region. | yes — auto-retry then fail | failed | `retry-recording` | AC-1 fixture `https://postman-echo.com/status/403`; 403 + geo body heuristic (covered by worker/recorder/classify.test.ts) |
+| `login_required` | blocked | The site requires a login to view content. | yes — auto-retry then fail | failed | `retry-recording` | AC-1 fixture `https://github.com/login`; final URL login redirect heuristic (covered by worker/recorder/classify.test.ts) |
+| `nav_timeout` | blocked | The page took too long to load. | yes — auto-retry then fail | failed | `retry-recording` | AC-1 fixture `https://httpbin.org/delay/10`; navigation deadline exceeded (covered by worker/recorder/classify.test.ts) |
+| `browser_crash` | system | The browser crashed during capture. | yes — auto-retry then fail | failed | `retry-recording` | AC-3 forcing pass step 53 — `taskkill /F` on Playwright chromium child mid-record; confirm code before relying on invalid-executable fallback (covered by worker/recorder/classify.test.ts) |
+| `ffmpeg_failure` | system | Video encoding failed. | yes — auto-retry then fail | failed | `retry-merge` | AC-3 forcing pass step 47 — point ffmpeg binary path at garbage; restore path and confirm merge succeeds |
+| `intro_missing` | system | The campaign has no intro video assigned. | n/a — pauses, does not fail | paused | `assign-intro` | not forced — pauses without failing; assign intro to resume (covered by scripts/verify-intros.ts) |
+| `missing_asset` | system | A required file is missing — re-record to replace it. | yes — auto-retry then fail | failed | `retry-recording` | AC-3 forcing pass step 45 — delete master from disk (not purged); re-record or re-import to restore (covered by lib/recording-precheck.test.ts) |
+| `storage_upload_failed` | system | Uploading the video to storage failed. | yes — auto-retry then fail | failed | `retry-merge` | AC-3 forcing pass step 49 — point bucket at nonexistent name or temporarily revoke `lead-videos`; restore bucket and confirm upload succeeds (covered by worker/video/upload.ts) |
+| `netlify_failure` | system | The Netlify deploy failed. | yes — auto-retry then fail | failed | `retry-deploy` | AC-3 forcing pass step 51 — set `NETLIFY_AUTH_TOKEN` to garbage; restore token and confirm deploy succeeds (covered by scripts/verify-leads-ui.ts drawer leg) |
+| `disk_full` | system | The worker ran out of disk space. | yes — auto-retry then fail | failed | `retry-recording` | not forced — ENOSPC during merge throws `disk_full` (covered by worker/video/merge.ts) |
+| `unknown` | system | An unexpected error occurred. | yes — auto-retry then fail | failed | `retry-recording` | not forced — classifier fallback when no rule matches (covered by worker/recorder/classify.ts) |
