@@ -30,6 +30,7 @@ import {
   ManifestMassRemovalError,
   type ManifestBuildResult,
 } from "./manifest"
+import { assertSiteOwnership } from "./ownership"
 import { createNetlifyClient, type NetlifyClient } from "./netlify"
 
 const MAX_SYNC_PASSES = 3
@@ -144,11 +145,19 @@ export async function publishManifest(input: {
   client?: NetlifyClient
   /** Skips the settings lookup when the caller already has a budget. */
   budgetMs?: number
+  /** Hermetic escape hatch for tests; omit in production. */
+  ownershipCachedPaths?: readonly string[] | null
 }): Promise<PublishManifestResult> {
   const budgetMs =
     input.budgetMs ??
     (await resolveMany(["deploy.timeout_ms"]))["deploy.timeout_ms"]
   const client = input.client ?? createNetlifyClient({ signal: input.signal })
+
+  await assertSiteOwnership({
+    siteId: assertEnv().NETLIFY_SITE_ID,
+    client,
+    cachedPaths: input.ownershipCachedPaths,
+  })
 
   const deploy = await client.createDeploy(input.manifest.files, input.title)
 

@@ -38,6 +38,8 @@ export type NetlifyFakeServer = {
   setMalformedFilesResponse: (value: boolean) => void
   setFailFirstDeployGet: (value: boolean) => void
   getSiteFiles: () => SiteFile[]
+  plantSiteFile: (path: string) => void
+  removeSiteFile: (path: string) => void
   close: () => Promise<void>
 }
 
@@ -268,6 +270,13 @@ export async function startNetlifyFake(
     },
     getSiteFiles() {
       return [...siteFiles.values()]
+    },
+    plantSiteFile(path: string) {
+      const bytes = Buffer.from("foreign")
+      siteFiles.set(path, { path, sha: sha1Hex(bytes), bytes })
+    },
+    removeSiteFile(path: string) {
+      siteFiles.delete(path)
     },
     close() {
       return new Promise((resolve, reject) => {

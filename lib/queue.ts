@@ -15,6 +15,8 @@ export type CleanupJobData = { trigger: CleanupTrigger }
 
 const LIVENESS_PREFIX = "pz:worker:alive:"
 const LIVENESS_TTL_SECONDS = 15
+const BOOT_MUTEX_KEY = "pz:worker:boot-mutex"
+const BOOT_MUTEX_TTL_SECONDS = 10
 /** Beat key drives the health endpoint's worker-down indicator (4 s TTL).
  *  Alive key drives reconcile() recovery (15 s TTL) — do not shorten it. */
 const BEAT_PREFIX = "pz:worker:beat:"
@@ -298,6 +300,27 @@ export async function registerLiveness(workerId: string): Promise<void> {
   await ensureRedisConnected()
   await getRedis().set(livenessKey(workerId), "1", "EX", LIVENESS_TTL_SECONDS)
 }
+
+/** Serializes check-then-register at boot. Held for milliseconds; the TTL is only a
+ *  crash guard. The real single-worker signal is the liveness key. */
+export async function acquireBootMutex(): Promise<boolean> {
+  await ensureRedisConnected()
+  const result = await getRedis().set(
+    BOOT_MUTEX_KEY,
+    "1",
+    "EX",
+    BOOT_MUTEX_TTL_SECONDS,
+    "NX",
+  )
+  return result === "OK"
+}
+
+export async function releaseBootMutex(): Promise<void> {
+  await ensureRedisConnected()
+  await getRedis().del(BOOT_MUTEX_KEY)
+}
+
+export { LIVENESS_TTL_SECONDS }
 
 async function refreshHeartbeats(
   workerId: string,

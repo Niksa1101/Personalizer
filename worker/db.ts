@@ -1431,6 +1431,75 @@ export async function listRetainedPages(): Promise<RetainedPageRow[]> {
 }
 
 /**
+ * Every path the app can account for, regardless of deploy_status — this is
+ * ownership, not manifest eligibility. A `removed` page still belongs to us.
+ */
+export async function listOwnedSitePaths(): Promise<string[]> {
+  const paths = new Set<string>()
+
+  for (let offset = 0; ; offset += MANIFEST_PAGE_SIZE) {
+    const { data, error } = await getSupabaseAdmin()
+      .from("landing_pages")
+      .select("id, path")
+      .order("id", { ascending: true })
+      .range(offset, offset + MANIFEST_PAGE_SIZE - 1)
+    if (error) throw new Error(`Failed to list landing page paths: ${error.message}`)
+    for (const row of data ?? []) paths.add(`${row.path}/index.html`)
+    if ((data?.length ?? 0) < MANIFEST_PAGE_SIZE) break
+  }
+
+  for (let offset = 0; ; offset += MANIFEST_PAGE_SIZE) {
+    const { data, error } = await getSupabaseAdmin()
+      .from("retained_pages")
+      .select("id, path")
+      .order("id", { ascending: true })
+      .range(offset, offset + MANIFEST_PAGE_SIZE - 1)
+    if (error) throw new Error(`Failed to list retained page paths: ${error.message}`)
+    for (const row of data ?? []) paths.add(`${row.path}/index.html`)
+    if ((data?.length ?? 0) < MANIFEST_PAGE_SIZE) break
+  }
+
+  return [...paths]
+}
+
+export async function listAdoptedSitePaths(siteId: string): Promise<string[]> {
+  const paths: string[] = []
+  for (let offset = 0; ; offset += MANIFEST_PAGE_SIZE) {
+    const { data, error } = await getSupabaseAdmin()
+      .from("adopted_site_paths")
+      .select("id, path")
+      .eq("site_id", siteId)
+      .order("id", { ascending: true })
+      .range(offset, offset + MANIFEST_PAGE_SIZE - 1)
+    if (error) throw new Error(`Failed to list adopted site paths: ${error.message}`)
+    for (const row of data ?? []) paths.push(row.path)
+    if ((data?.length ?? 0) < MANIFEST_PAGE_SIZE) break
+  }
+  return paths
+}
+
+export async function insertAdoptedSitePaths(input: {
+  siteId: string
+  paths: readonly string[]
+  note?: string
+}): Promise<number> {
+  if (input.paths.length === 0) return 0
+  const { data, error } = await getSupabaseAdmin()
+    .from("adopted_site_paths")
+    .upsert(
+      input.paths.map((path) => ({
+        site_id: input.siteId,
+        path,
+        note: input.note ?? null,
+      })),
+      { onConflict: "site_id,path", ignoreDuplicates: true },
+    )
+    .select("id")
+  if (error) throw new Error(`Failed to adopt site paths: ${error.message}`)
+  return data?.length ?? 0
+}
+
+/**
  * Runs after Netlify is already live, so a row that has since gone is benign —
  * throwing here would report a successful deploy as a failure. Returns whether
  * a row was actually removed.
