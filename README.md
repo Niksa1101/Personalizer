@@ -58,7 +58,7 @@ Each step is **idempotent and resumable**. A recording is reused across campaign
 - **Failure taxonomy, not stack traces.** Capture errors map to operator-facing codes (`dns_failure`, `nav_timeout`, `captcha`, `parked_domain`, `login_required`, `empty_page`…). Each code is marked terminal or retryable, and the error docs are generated from code (`docs/Errors.md`).
 - **Safe deploys.** Netlify deploys are full-manifest replacements, so the worker has an ownership guard, a Redis lock and a mass-removal floor to keep one bad sync from wiping the site.
 - **Operator UI.** A Next.js 16 / React 19 dashboard shows live SSE progress, a lead drawer with in-browser playback, queue health polling, filterable logs, retention/cleanup settings and CSV export.
-- **Security posture.** Single-operator session auth (HS256, throttled login, origin checks) and RLS on every table. The GitHub Action uses only an insert-only anon key; the service-role key never leaves the machine.
+- **Security posture.** Single-operator session auth (HS256, throttled login, origin checks) and RLS on every table. The service-role key never leaves the machine, and a verify script checks that it is absent from tracked files and git history.
 
 ## Tech stack
 
@@ -103,7 +103,7 @@ npm run dev                       # http://127.0.0.1:3000
 npm run worker                    # second terminal
 ```
 
-The full operator guide covers account setup, every environment variable, keep-alive, verification and a 14-item troubleshooting table: **[docs/SETUP.md](docs/SETUP.md)**.
+The full operator guide covers account setup, every environment variable, verification and a 13-item troubleshooting table: **[docs/SETUP.md](docs/SETUP.md)**.
 
 ## Project layout
 

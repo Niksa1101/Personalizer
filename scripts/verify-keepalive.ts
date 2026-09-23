@@ -1,5 +1,6 @@
 /**
- * Keep-alive workflow and anon-key blast-radius verification.
+ * Secret hygiene and anon-key blast-radius verification. (The name is historical:
+ * the keep-alive workflow it once also checked has been removed.)
  *
  * This script deliberately does **not** call `assertEnvOrExit()`. That helper
  * demands all eight required variables and calls `process.exit(1)`; this script
@@ -236,74 +237,9 @@ function summarize(): void {
 }
 
 function runOfflineLegs(scriptNames: Set<string>): void {
-  const workflowPath = join(repoRoot, ".github", "workflows", "supabase-keepalive.yml")
-
-  // mutation: remove workflow file path assertion target -> O1 fails
-  try {
-    readText(workflowPath)
-    pass("O1 workflow file exists")
-  } catch {
-    fail("O1 workflow file exists", "missing .github/workflows/supabase-keepalive.yml")
-  }
-
-  let workflowText = ""
-  try {
-    workflowText = readText(workflowPath)
-  } catch {
-    workflowText = ""
-  }
-
-  // mutation: remove HTTP 201 assertion line -> O2 fails
-  if (/\[ "\$code" != "201" \]/.test(workflowText)) {
-    pass("O2 workflow asserts HTTP 201 explicitly")
-  } else {
-    fail("O2 workflow asserts HTTP 201 explicitly", "201 assertion not found")
-  }
-
-  // mutation: remove Prefer header -> O3 fails
-  if (workflowText.includes('Prefer: return=minimal')) {
-    pass("O3 workflow sends Prefer: return=minimal")
-  } else {
-    fail("O3 workflow sends Prefer: return=minimal", "header not found")
-  }
-
-  // mutation: remove permissions or timeout -> O4 fails
-  if (/^permissions:\s*\{\}/m.test(workflowText) && /timeout-minutes:\s*5/.test(workflowText)) {
-    pass("O4 workflow declares permissions: {} and timeout-minutes")
-  } else {
-    fail("O4 workflow declares permissions: {} and timeout-minutes", "missing declaration")
-  }
-
-  // mutation: remove schedule or dispatch -> O5 fails
-  if (
-    workflowText.includes("'17 6 * * *'") &&
-    workflowText.includes("workflow_dispatch:")
-  ) {
-    pass("O5 workflow declares schedule and workflow_dispatch")
-  } else {
-    fail("O5 workflow declares schedule and workflow_dispatch", "trigger missing")
-  }
-
-  // mutation: delete the preflight role guard -> O11 fails
-  //
-  // O6/O9/O10 prove the privileged key is absent from this repository. None of
-  // them can see the repository *secret*, which is where the invariant is
-  // actually violated — the anon key and the privileged key sit on the same
-  // dashboard page. The workflow decodes the key it was handed and refuses a
-  // privileged role; this leg proves that guard is still in the file. The
-  // pattern is spelled with a wildcard because the workflow spells it that way
-  // — writing the literal identifier there would redden O6.
-  if (
-    /"role".*"service.role"/.test(workflowText) &&
-    workflowText.includes("base64 -d")
-  ) {
-    pass("O11 workflow rejects a privileged JWT in SUPABASE_ANON_KEY")
-  } else {
-    fail(
-      "O11 workflow rejects a privileged JWT in SUPABASE_ANON_KEY",
-      "preflight role guard not found",
-    )
-  }
+  // O1–O5 and O11 asserted the shape of .github/workflows/supabase-keepalive.yml.
+  // That workflow was removed, so those legs went with it; the repository-wide
+  // secret hygiene (O6–O10) and the anon-key blast-radius legs (N*) remain.
 
   // mutation: temp dir with fake service_role JWT -> O6 hits; clean dir -> no hits
   const githubFiles = listGithubFiles()

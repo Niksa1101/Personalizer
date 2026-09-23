@@ -847,7 +847,9 @@ Also **do not enable `cacheComponents`** (the PPR successor). Every screen in th
 
 ## 15. Keep-alive
 
-Supabase pauses inactive free-tier projects. A GitHub Actions cron writes one row daily. **`docs/SETUP.md` is canonical for the operator-facing walkthrough** — secrets, dispatch, silent-death traps, and manual prune SQL.
+> **Removed (2026-09-23).** `.github/workflows/supabase-keepalive.yml` was deleted and the project is allowed to pause; unpause it from the Supabase dashboard when needed. The `heartbeat` table and its insert-only anon policy remain in the schema, and `verify:keepalive` still exercises that policy (N1–N5). The reasoning below is kept as a record of the original design.
+
+Supabase pauses inactive free-tier projects. A GitHub Actions cron wrote one row daily.
 
 The shipped workflow is `.github/workflows/supabase-keepalive.yml` — **read it there, not here.** This section used to inline a copy of the YAML. The copy had already drifted (it lost every explanatory comment) and nothing checked it, so what follows is the reasoning only; the file is the sole source of what the workflow does.
 

@@ -34,7 +34,7 @@ npm run seed
 npm run dev                       # http://127.0.0.1:3000
 # sign in with APP_PASSWORD, open /campaigns and click into the demo campaign
 npm run verify:keepalive          # full set including network legs
-npm run worker                    # not exercised by the validation run — see Troubleshooting #14
+npm run worker                    # not exercised by the validation run — see Troubleshooting #13
 ```
 
 ## Prerequisites
@@ -55,7 +55,7 @@ Optional but required for in-drawer video playback: [Google Chrome](https://www.
 |---|---|
 | `NEXT_PUBLIC_SUPABASE_URL` | Supabase dashboard → Project Settings → API |
 | `SUPABASE_SERVICE_ROLE_KEY` | Same page — **server-side only, never in GitHub secrets** |
-| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Same page — also used as the keep-alive GitHub secret |
+| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Same page — optional, used only by verify scripts |
 | `NETLIFY_SITE_ID` | Netlify → create a **new empty site** → Site configuration → Site details |
 | `NETLIFY_TOKEN` | Netlify → User settings → Personal access tokens |
 | `LOCAL_STORAGE_ROOT` | Choose an absolute path on your machine (see [Configure](#configure)) |
@@ -84,7 +84,7 @@ Copy `.env.example` to `.env.local` and fill every value.
 
 **`SESSION_SECRET`** — HS256 signing key, minimum 32 characters. Quote the value if it contains `#`.
 
-**`NEXT_PUBLIC_SUPABASE_ANON_KEY`** — the project's anon (public) key. Not one of the eight startup variables, but required for `verify:keepalive`, `verify:dashboard`, and `verify:schema`. The same value goes into the `SUPABASE_ANON_KEY` GitHub secret for the keep-alive workflow.
+**`NEXT_PUBLIC_SUPABASE_ANON_KEY`** — the project's anon (public) key. Not one of the eight startup variables, but required for `verify:keepalive`, `verify:dashboard`, and `verify:schema`.
 
 ## Database setup
 
@@ -105,7 +105,7 @@ Two terminals:
 ```bash
 npm run redis:up    # once per machine reboot if Docker stopped the container
 npm run dev         # http://127.0.0.1:3000
-npm run worker      # second terminal — one instance only; see Troubleshooting #14
+npm run worker      # second terminal — one instance only; see Troubleshooting #13
 ```
 
 On first run, campaigns default to dry-run deploy posture until you change settings. `npm run seed` creates a demo campaign with slug `demo`; open it from `/campaigns`. Its id is generated at seed time, so there is no stable URL to bookmark.
@@ -124,38 +124,6 @@ Deep session behaviour (throttle tiers, lockout indistinguishability, origin che
 **Theme: a single dark theme, deliberately.** There is no toggle and no light mode. This is a local-only, single-operator admin tool that runs for long unattended sessions; one permanent theme removes a whole class of styling state. Do not add a theme switcher.
 
 After sign-in, every screen is reachable from the sidebar: **Work** (Dashboard, Leads, Queue), **Setup** (Campaigns, Intro Videos, Import), **System** (Logs, Settings).
-
-## Keep-alive
-
-Supabase pauses inactive free-tier projects. A daily GitHub Actions cron inserts one row into `public.heartbeat` using an **insert-only anon key** — never the service role key.
-
-### Repository secrets
-
-Create two secrets in GitHub → Settings → Secrets and variables → Actions:
-
-| Secret | Value |
-|---|---|
-| `SUPABASE_URL` | Same host as `NEXT_PUBLIC_SUPABASE_URL`, e.g. `https://abcdefghijklm.supabase.co` |
-| `SUPABASE_ANON_KEY` | Same value as `NEXT_PUBLIC_SUPABASE_ANON_KEY` |
-
-The names deliberately differ from `.env.local`: different key (`SUPABASE_ANON_KEY` vs `NEXT_PUBLIC_SUPABASE_ANON_KEY`), different trust boundary (GitHub Actions vs local machine). The anon key is constrained by RLS — insert-only on `heartbeat` with `source = 'github-action'`. **Never put `SUPABASE_SERVICE_ROLE_KEY` in a repository secret.**
-
-### Running and confirming
-
-- **Manual dispatch:** Actions → supabase-keepalive → Run workflow.
-- **Scheduled:** daily at 06:17 UTC (`17 6 * * *`).
-
-A **green Actions tab is not evidence the keep-alive is running.** A disabled schedule produces no runs at all, so there is nothing red to see — just nothing. GitHub disables scheduled workflows after **60 days of repository inactivity**, and this repo is expected to go quiet after Phase 18. Separately, if the anon key is rotated — or the legacy JWT key is disabled during a migration to publishable keys — the daily run starts failing against a repo nobody is watching.
-
-Confirm periodically with `npm run verify:keepalive -- --observe`, which reads `max(id)`, `max(created_at)` and `count(*)` from `heartbeat` using the service role key. **It reads only — running it does not itself keep anything alive.**
-
-### Manual prune (optional)
-
-Nothing currently runs automated heartbeat retention. To prune rows older than 90 days, paste into the Supabase SQL editor (service role / dashboard):
-
-```sql
-DELETE FROM heartbeat WHERE created_at < now() - interval '90 days';
-```
 
 ## Verification
 
@@ -180,7 +148,7 @@ Three levels:
 | `npm run verify:auth` | Auth wire contract (dev server required) |
 | `npm run verify:shell` | Shell route reachability (dev server required) |
 | `npm run verify:imports` | Dependency and binary smoke test — catches blocked `ffmpeg-static` postinstall |
-| `npm run verify:keepalive` | Keep-alive workflow + anon-key blast-radius checks |
+| `npm run verify:keepalive` | Secret hygiene + anon-key blast-radius checks |
 
 One `verify:<phase>` script per phase — see `package.json` for the full list.
 
@@ -199,11 +167,10 @@ One `verify:<phase>` script per phase — see `package.json` for the full list.
 | 9 | Writes fail deep in a batch directory | `MAX_PATH` | Enable Windows long-path support | [Configure](#configure) |
 | 10 | `ffmpeg_failure` on first merge / `verify:imports` red on ffmpeg | Blocked `ffmpeg-static` postinstall | `npm install-scripts approve ffmpeg-static` then re-run install | `docs/Tech.md` §16.2 |
 | 11 | ENOENT on first write under `LOCAL_STORAGE_ROOT` | Drive letter does not exist | Create the path (including drive) before first run | [Configure](#configure) |
-| 12 | Keep-alive Action fails 5xx | Supabase project paused | Unpause in dashboard, re-dispatch workflow | [Keep-alive](#keep-alive) |
-| 13 | Actions tab shows **no runs at all** | Schedule disabled after 60 days repo inactivity | Re-enable workflow in Actions tab | [Keep-alive](#keep-alive) |
-| 14 | Recordings marked purged that still exist on disk; leads reassigned or reset with no error | See verbatim entry below | Run one worker only | `worker/index.ts:52-84` |
+| 12 | App or verify scripts get 5xx / connection errors from Supabase | Free-tier project paused after a week of inactivity | Unpause it in the Supabase dashboard | Supabase dashboard |
+| 13 | Recordings marked purged that still exist on disk; leads reassigned or reset with no error | See verbatim entry below | Run one worker only | `worker/index.ts:52-84` |
 
-**Symptom (entry 14).** Recordings marked purged that still exist on disk; leads reassigned or reset with no error anywhere.
+**Symptom (entry 13).** Recordings marked purged that still exist on disk; leads reassigned or reset with no error anywhere.
 
 **Cause.** `worker/index.ts:52-84` runs `registerLiveness()`, `startWorkerHeartbeats()`, `runBootRecovery()`, `sweepStaleRecorderTemps()`, `armCleanupScheduler()` and a conditional cleanup catch-up enqueue **before the queue worker is even constructed**. Two mechanisms cause damage. First, a second worker whose environment diverges — above all a different `LOCAL_STORAGE_ROOT` — can run Phase 16 retention against the shared database while its file deletes find nothing, marking rows purged for files that are still there. Second, any second instance joins the liveness set that `runBootRecovery()` and `startPeriodicReconcile()` reason over, changing which in-flight leads are treated as orphaned.
 
@@ -216,7 +183,7 @@ One `verify:<phase>` script per phase — see `package.json` for the full list.
 ## Documentation
 
 - `docs/PRD.md` — product scope and build phases
-- `docs/Tech.md` — architecture, auth, pipeline, env, keep-alive
+- `docs/Tech.md` — architecture, auth, pipeline, env
 - `docs/DB.md` — schema and migrations
 - `docs/Errors.md` — generated error-code reference (`npm run docs:errors`)
 
