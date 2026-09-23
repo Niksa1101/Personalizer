@@ -116,7 +116,7 @@ export function checkDocScriptDrift(
   // Then every inline `code` span. A backticked table cell IS an inline span,
   // so this subsumes the cell scan it replaces and closes both of that scan's
   // gaps: commands in prose were invisible (`npm run verify:keepalive --
-  // --observe`, the command README § Keep-alive tells the operator to run
+  // --observe`, the command docs/SETUP.md § Keep-alive tells the operator to run
   // periodically, went unchecked), and anchoring on the surrounding pipes
   // consumed the trailing one, so the second of two adjacent backticked cells
   // never matched.
@@ -318,11 +318,15 @@ function runOfflineLegs(scriptNames: Set<string>): void {
   }
 
   // mutation: synthetic doc with npm run does-not-exist -> O7 fails
-  const readmeUnknown = checkDocScriptDrift(readText(join(repoRoot, "README.md")), scriptNames)
+  // The operator walkthrough moved to docs/SETUP.md; README.md is the overview.
+  const readmeUnknown = [
+    ...checkDocScriptDrift(readText(join(repoRoot, "README.md")), scriptNames),
+    ...checkDocScriptDrift(readText(join(repoRoot, "docs", "SETUP.md")), scriptNames),
+  ]
   if (readmeUnknown.length === 0) {
-    pass("O7 README names no unknown npm script")
+    pass("O7 README + docs/SETUP.md name no unknown npm script")
   } else {
-    fail("O7 README names no unknown npm script", readmeUnknown.join(", "))
+    fail("O7 README + docs/SETUP.md name no unknown npm script", readmeUnknown.join(", "))
   }
 
   // mutation: synthetic doc with npm run does-not-exist -> O8 fails

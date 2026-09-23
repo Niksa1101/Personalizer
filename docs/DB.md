@@ -733,7 +733,7 @@ This is the **only** table reachable by a non-service key. The cron uses a narro
 
 Because the key has **no** `SELECT`, the insert must not ask for the row back. PostgREST has defaulted to `Prefer: return=minimal` on `POST` since v9, so the `curl` in `.github/workflows/supabase-keepalive.yml` would succeed without it (verified: `201`), but the header is sent explicitly rather than relied upon. `Tech.md` §15 no longer inlines that YAML — the workflow file is the only copy.
 
-A weekly `DELETE FROM heartbeat WHERE created_at < now() - interval '90 days'` keeps it bounded — documented in `README.md` § Keep-alive as manual SQL for an operator who wants it. **Nothing currently runs this delete** — not the GitHub Action, not a cron elsewhere (`Tech.md` §17 item 13). At one row per day the table grows by roughly 365 rows a year, so the deferral costs nothing measurable; it is recorded because unbounded-by-design is worth stating out loud, not because it is urgent.
+A weekly `DELETE FROM heartbeat WHERE created_at < now() - interval '90 days'` keeps it bounded — documented in `docs/SETUP.md` § Keep-alive as manual SQL for an operator who wants it. **Nothing currently runs this delete** — not the GitHub Action, not a cron elsewhere (`Tech.md` §17 item 13). At one row per day the table grows by roughly 365 rows a year, so the deferral costs nothing measurable; it is recorded because unbounded-by-design is worth stating out loud, not because it is urgent.
 
 ---
 

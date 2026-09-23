@@ -847,7 +847,7 @@ Also **do not enable `cacheComponents`** (the PPR successor). Every screen in th
 
 ## 15. Keep-alive
 
-Supabase pauses inactive free-tier projects. A GitHub Actions cron writes one row daily. **README is canonical for the operator-facing walkthrough** — secrets, dispatch, silent-death traps, and manual prune SQL.
+Supabase pauses inactive free-tier projects. A GitHub Actions cron writes one row daily. **`docs/SETUP.md` is canonical for the operator-facing walkthrough** — secrets, dispatch, silent-death traps, and manual prune SQL.
 
 The shipped workflow is `.github/workflows/supabase-keepalive.yml` — **read it there, not here.** This section used to inline a copy of the YAML. The copy had already drifted (it lost every explanatory comment) and nothing checked it, so what follows is the reasoning only; the file is the sole source of what the workflow does.
 
@@ -863,7 +863,7 @@ The workflow asserts HTTP **201** explicitly — `--fail` alone cannot distingui
 
 That bound is now real rather than aspirational: `DB.md` §8.1 removed a storage policy that would have let this same key list every video in the bucket, and §7.1.1 revoked the table privileges Supabase grants `anon` by default. Both were found by measuring what the key could actually do — `npm run verify:keepalive` re-measures on every run.
 
-The `17 6 * * *` minute offset avoids the top-of-hour spike when every scheduled GitHub Action fires at once and queues. No automated prune runs — the 90-day `DELETE` is documented in `README.md` § Keep-alive for manual use (`DB.md` §5.13).
+The `17 6 * * *` minute offset avoids the top-of-hour spike when every scheduled GitHub Action fires at once and queues. No automated prune runs — the 90-day `DELETE` is documented in `docs/SETUP.md` § Keep-alive for manual use (`DB.md` §5.13).
 
 ---
 
