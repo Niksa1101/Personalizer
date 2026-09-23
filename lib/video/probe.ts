@@ -64,6 +64,11 @@ export async function probe(filePath: string): Promise<ProbeResult> {
     throw error
   }
 
+  return parseProbeOutput(stdout)
+}
+
+/** Pure ffprobe JSON → ProbeResult mapping — exported for unit tests. */
+export function parseProbeOutput(stdout: string): ProbeResult {
   let parsed: FfprobeJson
   try {
     parsed = JSON.parse(stdout) as FfprobeJson
