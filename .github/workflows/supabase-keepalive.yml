@@ -10,7 +10,7 @@ name: supabase-keepalive
 # and a leak there is total exposure of every lead.
 #
 # The secret names deliberately differ from .env.local's NEXT_PUBLIC_* names:
-# different key, different trust boundary. See README.md § Keep-alive.
+# different key, different trust boundary. See docs/SETUP.md § Keep-alive.
 #
 # Note the spelling "SERVICE ROLE KEY" with spaces, above and throughout this
 # file. `verify:keepalive` O6 scans every file under .github/** for the literal
@@ -47,7 +47,7 @@ jobs:
             missing=1
           fi
           if [ "$missing" -ne 0 ]; then
-            echo "::error::See README.md section 'Keep-alive' for how to create both secrets."
+            echo "::error::See docs/SETUP.md section 'Keep-alive' for how to create both secrets."
             exit 1
           fi
           # A pasted dashboard URL (https://supabase.com/dashboard/project/...)
@@ -157,4 +157,4 @@ jobs:
           echo "  3. The heartbeat_insert_only RLS policy changed. The response body above names"
           echo "     the rejecting policy."
           echo "  4. SUPABASE_URL points at the wrong project."
-          echo "See README.md section 'Keep-alive'."
+          echo "See docs/SETUP.md section 'Keep-alive'."
